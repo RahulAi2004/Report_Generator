@@ -8,14 +8,17 @@ projection of whatever this endpoint returns for the signed-in user.
 
 from __future__ import annotations
 
+import sqlalchemy as sa
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 from sqlalchemy.orm import Session as DbSession
 
 from app.core.db import get_session
 from app.core.deps import current_principal, require, write_audit
 from app.core.security import Permission, Principal
 from app.domain.report.resolver import legal_operators
-from app.domain.schema.registry import Aggregation, TableMeta
+from app.domain.schema.registry import Aggregation, RelationshipSource, TableMeta
+from app.models.metadata_models import LogicalRelationship
 from app.adapters.factory import get_adapter
 from app.core.config import settings
 from app.services import schema_service
@@ -137,6 +140,94 @@ def suggest_relationships(
     """Name-based suggestions for databases without declared foreign keys."""
     registry = schema_service.build_registry(db, principal)
     return {"suggestions": schema_service.infer_relationships(registry)}
+
+
+class RelationshipInput(BaseModel):
+    left_table: str
+    left_column: str
+    right_table: str
+    right_column: str
+    cardinality: str = "1:N"
+    join_type: str = "left"
+    confidence: float = 0.8
+
+
+@router.post("/relationships")
+def create_relationships(
+    payload: list[RelationshipInput],
+    db: DbSession = Depends(get_session),
+    principal: Principal = Depends(require(Permission.MANAGE_SCHEMA)),
+):
+    """
+    Accept logical relationships.
+
+    Stored in the metadata database, never as constraints on the operational
+    database (spec 1). This is the only way to make a schema of views joinable,
+    since a view cannot carry a foreign key.
+    """
+    registry = schema_service.build_registry(db, principal)
+    created, skipped = 0, 0
+
+    for item in payload:
+        # Both ends must exist and be visible to this admin.
+        if not registry.has(item.left_table, item.left_column) or not registry.has(
+            item.right_table, item.right_column
+        ):
+            skipped += 1
+            continue
+
+        duplicate = db.scalar(
+            sa.select(LogicalRelationship).where(
+                LogicalRelationship.connection_id == schema_service.DEFAULT_CONNECTION_ID,
+                LogicalRelationship.left_table == item.left_table,
+                LogicalRelationship.left_column == item.left_column,
+                LogicalRelationship.right_table == item.right_table,
+                LogicalRelationship.right_column == item.right_column,
+            )
+        )
+        if duplicate is not None:
+            skipped += 1
+            continue
+
+        db.add(
+            LogicalRelationship(
+                connection_id=schema_service.DEFAULT_CONNECTION_ID,
+                left_table=item.left_table,
+                left_column=item.left_column,
+                right_table=item.right_table,
+                right_column=item.right_column,
+                cardinality=item.cardinality,
+                default_join_type=item.join_type,
+                source=RelationshipSource.INFERRED.value,
+                confidence=item.confidence,
+                created_by=principal.id,
+            )
+        )
+        created += 1
+
+    db.commit()
+    write_audit(db, principal, "relationships_defined",
+                payload={"created": created, "skipped": skipped})
+    return {"created": created, "skipped": skipped}
+
+
+@router.delete("/relationships/{relationship_id}")
+def delete_relationship(
+    relationship_id: str,
+    db: DbSession = Depends(get_session),
+    principal: Principal = Depends(require(Permission.MANAGE_SCHEMA)),
+):
+    """Remove a logical relationship. Physical foreign keys are not ours to delete."""
+    row = db.get(LogicalRelationship, relationship_id)
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Not found. Relationships discovered from foreign keys cannot be removed here.",
+        )
+    db.delete(row)
+    db.commit()
+    write_audit(db, principal, "relationship_removed", resource_id=relationship_id)
+    return {"ok": True}
 
 
 @router.post("/scan")

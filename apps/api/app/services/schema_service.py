@@ -171,54 +171,110 @@ def _mask_policies(
 # ---------------------------------------------------------------------------
 # Relationship inference (spec 1) -- proposed to an admin, never auto-applied.
 # ---------------------------------------------------------------------------
+def _identity_column(table) -> object | None:
+    """
+    The column another table would reference.
+
+    Declared primary keys are preferred, but a view cannot have one -- and a
+    schema of curated reporting views is exactly where relationship discovery
+    matters most -- so fall back to the naming convention.
+    """
+    if len(table.primary_key) == 1:
+        return table.primary_key[0]
+
+    singular = table.name.lower().rstrip("s")
+    for candidate in ("id", f"{singular}_id", f"{table.name.lower()}_id"):
+        column = table.column(candidate)
+        if column is not None:
+            return column
+    return None
+
+
+def _entity_names(table_name: str) -> set[str]:
+    """Forms of a table name that a `<stem>_id` column might refer to."""
+    lowered = table_name.lower()
+    names = {lowered}
+    if lowered.endswith("ies"):
+        names.add(lowered[:-3] + "y")
+    if lowered.endswith("es"):
+        names.add(lowered[:-2])
+    if lowered.endswith("s"):
+        names.add(lowered[:-1])
+    return names
+
+
 def infer_relationships(registry: SchemaRegistry) -> list[dict]:
     """
-    Suggest links for databases whose foreign keys were never declared.
+    Suggest links for schemas whose foreign keys were never declared.
 
-    Only name-and-type evidence is used, and every suggestion is returned with
-    its reasoning so an administrator can judge it. Nothing is activated until
-    they accept it.
+    PostgreSQL views cannot carry foreign keys at all, so a reporting schema
+    built from views arrives with no relationships whatsoever and no report can
+    join anything until these are accepted.
+
+    Only naming and type evidence is used, and every suggestion carries its
+    reasoning. Nothing is activated until an administrator accepts it.
     """
     existing = {
         (r.left_table.lower(), r.left_column.lower(), r.right_table.lower(), r.right_column.lower())
         for r in registry.relationships
     }
-    primary_keys = {
-        table.name.lower(): table.primary_key[0]
-        for table in registry.tables
-        if len(table.primary_key) == 1
-    }
+
+    # entity name -> (table, its identity column)
+    targets: dict[str, tuple] = {}
+    for table in registry.tables:
+        identity = _identity_column(table)
+        if identity is None:
+            continue
+        for name in _entity_names(table.name):
+            # A real table name wins over a singularised guess.
+            if name not in targets or name == table.name.lower():
+                targets[name] = (table, identity)
 
     suggestions: list[dict] = []
     for table in registry.tables:
         for column in table.columns:
-            if column.is_primary_key or not column.name.lower().endswith("_id"):
+            name = column.name.lower()
+            if not name.endswith("_id") or column.is_primary_key:
                 continue
 
-            stem = column.name.lower()[:-3]
-            for candidate in (f"{stem}s", stem, f"{stem}es"):
-                target_pk = primary_keys.get(candidate)
-                if target_pk is None or candidate == table.name.lower():
-                    continue
-                if target_pk.data_type != column.data_type:
-                    continue
-                key = (candidate, target_pk.name.lower(), table.name.lower(), column.name.lower())
-                if key in existing:
-                    continue
+            stem = name[:-3]
+            target = targets.get(stem)
+            if target is None:
+                continue
 
-                suggestions.append({
-                    "left_table": candidate,
-                    "left_column": target_pk.name,
-                    "right_table": table.name,
-                    "right_column": column.name,
-                    "cardinality": Cardinality.ONE_TO_MANY.value,
-                    "confidence": 0.8,
-                    "reason": (
-                        f"{table.name}.{column.name} matches the naming convention for a "
-                        f"reference to {candidate}.{target_pk.name}, and the types agree."
-                    ),
-                })
-                break
+            target_table, target_column = target
+            if target_table.name.lower() == table.name.lower():
+                continue  # self-reference; a person must confirm those
+            if target_column.data_type != column.data_type:
+                continue
+
+            key = (
+                target_table.name.lower(), target_column.name.lower(),
+                table.name.lower(), name,
+            )
+            if key in existing:
+                continue
+
+            declared = bool(target_table.primary_key)
+            suggestions.append({
+                "left_table": target_table.name,
+                "left_column": target_column.name,
+                "right_table": table.name,
+                "right_column": column.name,
+                "cardinality": Cardinality.ONE_TO_MANY.value,
+                "join_type": JoinType.LEFT.value,
+                "confidence": 0.9 if declared else 0.75,
+                "reason": (
+                    f"{table.name}.{column.name} follows the naming convention for a "
+                    f"reference to {target_table.name}.{target_column.name}, and both are "
+                    f"{column.data_type.value}."
+                    + ("" if declared else
+                       f" {target_table.name} is a view, so its identity column was "
+                       "identified by name rather than a declared primary key.")
+                ),
+            })
+
+    suggestions.sort(key=lambda s: (s["right_table"], s["right_column"]))
     return suggestions
 
 
