@@ -38,7 +38,7 @@ class PostgresAdapter(DatabaseAdapter):
             SELECT c.relname AS table_name, GREATEST(c.reltuples, 0)::bigint AS rows
             FROM pg_class c
             JOIN pg_namespace n ON n.oid = c.relnamespace
-            WHERE n.nspname = :schema AND c.relkind IN ('r', 'p', 'v', 'm')
+            WHERE n.nspname = :schema AND c.relkind IN ('r', 'p', 'm')
             """
         )
         try:

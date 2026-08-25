@@ -266,7 +266,7 @@ class DatabaseAdapter(ABC):
                     schema=schema or "public",
                     kind="view" if is_view else "table",
                     category=categorize(name),
-                    estimated_rows=estimates.get(name, 0),
+                    estimated_rows=estimates.get(name),
                     columns=columns,
                 )
             )

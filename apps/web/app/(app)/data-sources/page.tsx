@@ -184,7 +184,13 @@ export default function DataSourcesPage() {
                         {table.column_count}
                       </td>
                       <td className="px-4 py-1.5 text-right text-sm tabular">
-                        {table.estimated_rows.toLocaleString()}
+                        {table.estimated_rows === null ? (
+                          <span className="text-ink-faint" title="Views carry no row statistics">
+                            —
+                          </span>
+                        ) : (
+                          table.estimated_rows.toLocaleString()
+                        )}
                       </td>
                       <td className="px-4 py-1.5 font-mono text-xs text-ink-muted">
                         {table.primary_key.join(', ') || <span className="text-warn">none</span>}

@@ -110,7 +110,8 @@ export interface SchemaTable {
   kind: string;
   category: string;
   description: string | null;
-  estimated_rows: number;
+  /** null when the engine has no cheap estimate, e.g. for a view. */
+  estimated_rows: number | null;
   column_count: number;
   primary_key: string[];
   is_sensitive: boolean;

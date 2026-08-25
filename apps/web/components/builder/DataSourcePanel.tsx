@@ -164,7 +164,7 @@ export function DataSourcePanel({
 
                         <span
                           className="min-w-0 flex-1 truncate text-sm"
-                          title={`${table.name} · ${table.estimated_rows.toLocaleString()} rows${
+                          title={`${table.name} · ${table.estimated_rows === null ? 'row count unknown' : `${table.estimated_rows.toLocaleString()} rows`}${
                             table.primary_key.length
                               ? ` · PK: ${table.primary_key.join(', ')}`
                               : ' · no primary key'
@@ -194,7 +194,9 @@ export function DataSourcePanel({
 
                         {!selected && !isPrimary && (
                           <span className="shrink-0 text-2xs tabular text-ink-faint">
-                            {compactNumber(table.estimated_rows)}
+                            {table.estimated_rows === null
+                              ? ''
+                              : compactNumber(table.estimated_rows)}
                           </span>
                         )}
                       </div>

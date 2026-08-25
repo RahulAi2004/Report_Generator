@@ -140,7 +140,10 @@ class TableMeta:
     display_name: str | None = None
     category: str = "Uncategorized"
     description: str | None = None
-    estimated_rows: int = 0
+    #: None when the engine has no cheap estimate -- views have no planner
+    #: statistics, and reporting "0 rows" for a populated view is worse than
+    #: admitting we do not know.
+    estimated_rows: int | None = None
     columns: tuple[ColumnMeta, ...] = ()
     enabled_for_reporting: bool = True
     enabled_for_ai: bool = True

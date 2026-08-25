@@ -177,7 +177,7 @@ def overview(
         "table_count": len(tables),
         "column_count": sum(len(table.columns) for table in tables),
         "relationship_count": len(registry.relationships),
-        "estimated_rows": sum(table.estimated_rows for table in tables),
+        "estimated_rows": sum(t.estimated_rows or 0 for t in tables),
         "categories": [
             {"name": name, "count": len(items)}
             for name, items in registry.categories().items()
