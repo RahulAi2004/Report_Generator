@@ -66,7 +66,18 @@ export const api = {
       `/schema/tables${search ? `?search=${encodeURIComponent(search)}` : ''}`,
     ),
   table: (name: string) => request<SchemaTable>(`/schema/tables/${encodeURIComponent(name)}`),
-  relationships: () => request<{ relationships: unknown[] }>('/schema/relationships'),
+  relationships: () => request<{ relationships: Relationship[] }>('/schema/relationships'),
+  relationshipSuggestions: () =>
+    request<{ suggestions: RelationshipSuggestion[] }>('/schema/relationships/suggestions'),
+  acceptRelationships: (items: RelationshipSuggestion[]) =>
+    post<{ created: number; skipped: number }>(
+      '/schema/relationships',
+      items.map(({ left_table, left_column, right_table, right_column, cardinality, confidence }) => ({
+        left_table, left_column, right_table, right_column, cardinality, confidence,
+      })),
+    ),
+  deleteRelationship: (id: string) =>
+    request<{ ok: boolean }>(`/schema/relationships/${id}`, { method: 'DELETE' }),
   overview: () => request<Record<string, unknown>>('/schema/overview'),
 
   // -- report engine ------------------------------------------------------
@@ -167,4 +178,28 @@ export interface SavedReportSummary {
   last_run_at: string | null;
   run_count: number;
   summary: Record<string, number>;
+}
+
+
+export interface Relationship {
+  id: string;
+  left_table: string;
+  left_column: string;
+  right_table: string;
+  right_column: string;
+  cardinality: string;
+  join_type: string;
+  source: 'physical' | 'manual' | 'inferred';
+  confidence: number;
+}
+
+export interface RelationshipSuggestion {
+  left_table: string;
+  left_column: string;
+  right_table: string;
+  right_column: string;
+  cardinality: string;
+  join_type: string;
+  confidence: number;
+  reason: string;
 }

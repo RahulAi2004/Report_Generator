@@ -3,6 +3,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { useMemo, useState } from 'react';
 import { Badge, EmptyState, Skeleton } from '@/components/ui/primitives';
+import { RelationshipsPanel } from '@/components/schema/RelationshipsPanel';
 import { api } from '@/lib/api';
 
 /**
@@ -32,6 +33,8 @@ interface Overview {
 }
 
 export default function DataSourcesPage() {
+  const me = useQuery({ queryKey: ['me'], queryFn: api.me });
+  const canManage = Boolean(me.data?.permissions.includes('manage_schema'));
   const overview = useQuery({ queryKey: ['overview'], queryFn: api.overview });
   const catalog = useQuery({ queryKey: ['tables'], queryFn: () => api.tables() });
   const [search, setSearch] = useState('');
@@ -101,6 +104,8 @@ export default function DataSourcesPage() {
             </div>
           ))}
         </div>
+
+        <RelationshipsPanel canManage={canManage} />
 
         {stats && stats.tables_without_primary_key.length > 0 && (
           <div className="rounded-lg border border-warn-border bg-warn-soft px-4 py-2.5 text-xs text-warn">
