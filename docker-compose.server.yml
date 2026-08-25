@@ -1,0 +1,35 @@
+# ---------------------------------------------------------------------------
+# Override: the operational database is another container on the same host.
+#
+# A container published only on 127.0.0.1 is not reachable from inside another
+# container -- the host gateway is not the host's loopback. The correct fix is
+# to attach this stack's backend to the network the database already sits on and
+# address it by container name.
+#
+# This JOINS an existing network. It does not create, modify or reconfigure it,
+# and it changes nothing about the database container or anything else already
+# attached to that network.
+#
+# Usage:
+#   docker compose -f docker-compose.prod.yml -f docker-compose.server.yml \
+#     --env-file .env.production up -d
+#
+# and in .env.production set:
+#   DATABASE_HOST=<database container name>
+#   DATABASE_PORT=5432          # the container's own port, not the published one
+#   OPERATIONAL_DB_NETWORK=<existing docker network name>
+#
+# Find those with:
+#   docker inspect <db container> --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}'
+# ---------------------------------------------------------------------------
+
+services:
+  api:
+    networks:
+      - default
+      - operational_db
+
+networks:
+  operational_db:
+    external: true
+    name: ${OPERATIONAL_DB_NETWORK:?set OPERATIONAL_DB_NETWORK to the existing network the database is on}
