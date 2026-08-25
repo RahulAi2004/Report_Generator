@@ -14,6 +14,11 @@
 
 name: bi-prod
 
+# Memory ceilings (mem_limit on each service). This stack shares a host with
+# other applications, so it is capped: if the host runs short of memory the
+# kernel reclaims from these containers rather than killing someone else's.
+# Total ceiling is roughly 1.6 GB.
+
 x-logging: &default-logging
   driver: json-file
   options:
@@ -41,6 +46,8 @@ services:
       timeout: 5s
       retries: 10
     logging: *default-logging
+    mem_limit: 256m
+
 
   redis:
     image: redis:7-alpine
@@ -60,6 +67,8 @@ services:
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD}
     logging: *default-logging
+    mem_limit: 128m
+
 
   # -- Backend ---------------------------------------------------------------
   api:
@@ -117,6 +126,8 @@ services:
     security_opt:
       - no-new-privileges:true
     logging: *default-logging
+    mem_limit: 768m
+
 
   # -- Frontend --------------------------------------------------------------
   web:
@@ -138,6 +149,8 @@ services:
     security_opt:
       - no-new-privileges:true
     logging: *default-logging
+    mem_limit: 384m
+
 
   # -- Edge ------------------------------------------------------------------
   nginx:
@@ -159,6 +172,8 @@ services:
       timeout: 5s
       retries: 3
     logging: *default-logging
+    mem_limit: 64m
+
 
 volumes:
   metadata_data:
