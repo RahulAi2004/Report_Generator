@@ -10,9 +10,13 @@ Usage
     docker compose -f docker-compose.prod.yml exec api \\
         python scripts/bootstrap_admin.py --email you@company.com
 
-The password is read from the ADMIN_PASSWORD environment variable, or prompted
-for interactively. It is never accepted on the command line, where it would be
-captured by shell history and by `ps`.
+The password is read from stdin (--password-stdin), from the ADMIN_PASSWORD
+environment variable, or prompted for interactively. It is never accepted as a
+command-line argument, where it would be captured by shell history and by `ps`.
+
+    printf '%s' "$NEW_PASSWORD" | docker compose ... exec -T api \
+        python scripts/bootstrap_admin.py --email you@company.com \
+        --promote --password-stdin
 """
 
 from __future__ import annotations
@@ -65,6 +69,11 @@ def main() -> int:
         action="store_true",
         help="If the account already exists, raise it to Super Admin",
     )
+    parser.add_argument(
+        "--password-stdin",
+        action="store_true",
+        help="Read the password from standard input (safest for scripted use)",
+    )
     args = parser.parse_args()
 
     from sqlalchemy import func, select
@@ -80,6 +89,13 @@ def main() -> int:
     if args.generate_password:
         generated = suggest()
         password = generated
+    elif args.password_stdin:
+        # Preferred for automation: a password passed as an argument or an
+        # environment variable is visible in `ps` and may land in shell history.
+        password = sys.stdin.readline().rstrip("\r\n")
+        if not password:
+            print("No password received on stdin.", file=sys.stderr)
+            return 2
     else:
         password = os.environ.get("ADMIN_PASSWORD") or ""
         if not password:
