@@ -100,12 +100,48 @@ for router in (auth.router, schema.router, reports.router):
     app.include_router(router, prefix=settings.api_v1_prefix)
 
 
+#: Connectivity result is cached briefly. The health endpoint is unauthenticated
+#: and the sign-in page calls it, so it must not become a way to make the
+#: operational database run a query on every page load.
+_health_cache: dict[str, object] = {"checked_at": 0.0, "connected": False, "detail": ""}
+_HEALTH_TTL_SECONDS = 15
+
+
+def _check_operational_database() -> tuple[bool, str]:
+    """One cheap round-trip to confirm the operational database is reachable."""
+    import time
+
+    now = time.monotonic()
+    if now - float(_health_cache["checked_at"]) < _HEALTH_TTL_SECONDS:
+        return bool(_health_cache["connected"]), str(_health_cache["detail"])
+
+    try:
+        import sqlalchemy as sa
+
+        adapter = get_adapter()
+        with adapter.engine.connect() as connection:
+            connection.execute(sa.text("SELECT 1"))
+        connected, detail = True, ""
+    except Exception as error:
+        # The reason is logged in full; the response stays generic because this
+        # endpoint needs no authentication and must not leak host or credentials.
+        logger.error("Operational database health check failed: %s", error)
+        connected, detail = False, "The reporting database could not be reached."
+
+    _health_cache.update({"checked_at": now, "connected": connected, "detail": detail})
+    return connected, detail
+
+
 @app.get("/api/health", tags=["system"])
 def health():
     adapter = get_adapter()
+    connected, detail = _check_operational_database()
     return {
-        "status": "ok",
+        "status": "ok" if connected else "degraded",
+        "database_connected": connected,
+        "database_detail": detail,
         "mode": settings.data_source_mode,
         "dialect": adapter.dialect,
         "read_only_enforced": settings.database_enforce_read_only,
+        "is_replica": settings.database_is_replica,
     }
