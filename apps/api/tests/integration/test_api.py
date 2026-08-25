@@ -418,3 +418,19 @@ def test_login_sets_a_usable_cookie_over_http(client):
     # checks the flag and proves the resulting session works.
     if "Secure" not in header:
         assert fresh.get("/api/v1/auth/me").status_code == 200
+
+
+def test_blank_boolean_env_var_does_not_crash_startup():
+    """
+    Compose renders an unset variable as an empty string. Treating that as an
+    invalid boolean took the whole service down over a value nobody had set.
+    """
+    from app.core.config import Settings
+
+    settings = Settings(
+        environment="production",
+        public_origin="http://bi.internal",
+        session_cookie_secure="",
+    )
+    assert settings.session_cookie_secure is None
+    assert settings.cookies_are_secure is False

@@ -90,6 +90,20 @@ class Settings(BaseSettings):
     anomaly_stale_order_days: int = 7
     anomaly_max_rows_per_rule: int = 5_000
 
+    @field_validator("session_cookie_secure", mode="before")
+    @classmethod
+    def _blank_means_unset(cls, value):
+        """
+        Treat an empty value as "not configured".
+
+        Compose renders an unset variable as an empty string, so a template that
+        leaves this blank would otherwise crash the whole service on a value the
+        operator never actually set.
+        """
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
     @field_validator("app_secret")
     @classmethod
     def _reject_default_secret_in_production(cls, value: str, info) -> str:
