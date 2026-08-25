@@ -103,6 +103,7 @@ services:
       DATABASE_USER: ${DATABASE_USER}
       DATABASE_PASSWORD: ${DATABASE_PASSWORD}
       DATABASE_SSL: ${DATABASE_SSL:-require}
+      DATABASE_SCHEMA: ${DATABASE_SCHEMA:-public}
       # The startup self-test refuses to boot if this connection can write.
       DATABASE_ENFORCE_READ_ONLY: ${DATABASE_ENFORCE_READ_ONLY:-true}
       DATABASE_IS_REPLICA: ${DATABASE_IS_REPLICA:-false}

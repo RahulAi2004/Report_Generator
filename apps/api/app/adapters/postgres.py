@@ -27,7 +27,9 @@ class PostgresAdapter(DatabaseAdapter):
         return True
 
     def default_schema(self) -> str | None:
-        return "public"
+        from app.core.config import settings
+
+        return settings.database_schema or "public"
 
     def row_estimates(self, schema: str | None) -> dict[str, int]:
         """Planner statistics, not COUNT(*). Cheap on tables of any size."""
@@ -36,7 +38,7 @@ class PostgresAdapter(DatabaseAdapter):
             SELECT c.relname AS table_name, GREATEST(c.reltuples, 0)::bigint AS rows
             FROM pg_class c
             JOIN pg_namespace n ON n.oid = c.relnamespace
-            WHERE n.nspname = :schema AND c.relkind IN ('r', 'p')
+            WHERE n.nspname = :schema AND c.relkind IN ('r', 'p', 'v', 'm')
             """
         )
         try:

@@ -56,6 +56,11 @@ class Settings(BaseSettings):
     #: fail with a confusing authentication error instead of a clear one.
     database_password: str = ""
     database_ssl: str = "prefer"
+    #: Which schema to introspect. Databases often keep a curated set of
+    #: reporting views alongside the raw application tables; pointing at that
+    #: schema is the difference between offering a business user 36 meaningful
+    #: views and 89 tables that include migrations and webhook logs.
+    database_schema: str = "public"
 
     #: When true the app performs the write-probe self-test at startup and
     #: refuses to serve if the operational connection turns out to be writable.
