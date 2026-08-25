@@ -23,6 +23,7 @@ from app.adapters.factory import get_adapter
 from app.core.security import Principal
 from app.domain.schema.registry import (
     Cardinality,
+    DataType,
     ColumnMeta,
     JoinType,
     MaskPolicy,
@@ -217,6 +218,21 @@ def _entity_names(table_name: str) -> set[str]:
     return names
 
 
+#: Types that can sensibly reference one another. An uploaded spreadsheet
+#: carries uuids as text, so demanding identical types would stop a file of
+#: order ids ever linking to the orders it names.
+_COMPATIBLE: list[set] = [
+    {DataType.TEXT, DataType.UUID},
+    {DataType.INTEGER, DataType.DECIMAL},
+]
+
+
+def _compatible(left: DataType, right: DataType) -> bool:
+    if left == right:
+        return True
+    return any({left, right} <= group for group in _COMPATIBLE)
+
+
 def infer_relationships(registry: SchemaRegistry) -> list[dict]:
     """
     Suggest links for schemas whose foreign keys were never declared.
@@ -259,7 +275,7 @@ def infer_relationships(registry: SchemaRegistry) -> list[dict]:
             target_table, target_column = target
             if target_table.name.lower() == table.name.lower():
                 continue  # self-reference; a person must confirm those
-            if target_column.data_type != column.data_type:
+            if not _compatible(target_column.data_type, column.data_type):
                 continue
 
             key = (

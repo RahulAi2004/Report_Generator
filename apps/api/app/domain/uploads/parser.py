@@ -143,6 +143,11 @@ def _as_datetime(value: str):
         return None
 
 
+_UUID = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE
+)
+
+
 def infer_type(values: list[str]) -> DataType:
     """
     Pick the narrowest type that fits every non-empty sample.
@@ -156,6 +161,10 @@ def infer_type(values: list[str]) -> DataType:
 
     lowered = [str(v).strip() for v in samples]
 
+    if all(_UUID.match(v) for v in lowered):
+        # Identifying these matters: a spreadsheet of order ids is only useful
+        # if it can be joined to the orders it refers to.
+        return DataType.UUID
     if all(v.lower() in _TRUE | _FALSE for v in lowered):
         return DataType.BOOLEAN
     if all(_as_int(v) is not None for v in lowered):

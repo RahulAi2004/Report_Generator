@@ -112,6 +112,7 @@ class ReportCompiler:
         self.qualify_schema = qualify_schema
         self._tables: dict[str, sa.Table] = {}
         self._metadata = sa.MetaData()
+        self._registry = None
 
     # ------------------------------------------------------------------
     def compile(
@@ -127,6 +128,7 @@ class ReportCompiler:
         parameters = parameters or {}
         self._tables.clear()
         self._metadata = sa.MetaData()
+        self._registry = resolved.registry
 
         for name in {*plan.tables, *(c.table for c in resolved.columns)}:
             table_meta = resolved.registry.table(name)
@@ -207,6 +209,28 @@ class ReportCompiler:
 
     def _column(self, table: str, field_name: str) -> sa.Column:
         return self._tables[table].c[field_name]
+
+    def _join_on(self, left_table, left_column, right_table, right_column):
+        """
+        Build a join condition, casting when the two sides are typed differently.
+
+        An uploaded spreadsheet carries uuids as text, and PostgreSQL has no
+        `uuid = text` operator -- so without this, joining a file of order ids to
+        the orders themselves fails outright.
+        """
+        left = self._column(left_table, left_column)
+        right = self._column(right_table, right_column)
+
+        registry = self._registry
+        left_meta = registry.column(left_table, left_column) if registry else None
+        right_meta = registry.column(right_table, right_column) if registry else None
+        if (
+            left_meta is not None
+            and right_meta is not None
+            and left_meta.data_type != right_meta.data_type
+        ):
+            return sa.cast(left, sa.Text) == sa.cast(right, sa.Text)
+        return left == right
 
     # ------------------------------------------------------------------
     # Pre-aggregated branches -- the fan-out correction.
@@ -333,8 +357,9 @@ class ReportCompiler:
                 continue  # the attachment edge lives in the outer query
             clause = clause.join(
                 self._tables[step.to_table],
-                self._column(step.from_table, step.from_column)
-                == self._column(step.to_table, step.to_column),
+                self._join_on(
+                    step.from_table, step.from_column, step.to_table, step.to_column
+                ),
                 isouter=step.join_type is not JoinType.INNER,
             )
         return clause
@@ -368,8 +393,9 @@ class ReportCompiler:
                 continue
             clause = clause.join(
                 self._tables[step.to_table],
-                self._column(step.from_table, step.from_column)
-                == self._column(step.to_table, step.to_column),
+                self._join_on(
+                    step.from_table, step.from_column, step.to_table, step.to_column
+                ),
                 isouter=step.join_type is not JoinType.INNER,
             )
         return clause
