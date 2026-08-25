@@ -246,9 +246,9 @@ class JoinPlanner:
                 diagnostics.error(
                     Code.AMBIGUOUS_JOIN_PATH,
                     f"There are {len(options)} equally valid ways to join "
-                    f"{self._label(best_target)} into this report. Choose one under "
-                    "Edit Relationships -- picking automatically would silently change "
-                    "your numbers.",
+                    f"{self._label(best_target)} into this report, and they answer "
+                    "different questions. Pick the one whose join keys match what you "
+                    "mean -- choosing automatically would silently change your numbers.",
                     section="joins",
                     target=best_target,
                     fix={

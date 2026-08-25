@@ -98,18 +98,26 @@ export function DiagnosticsBar({
                 {/* The planner will not guess between equal paths, so the
                     choice is offered here rather than left as advice. */}
                 {item.fix?.action === 'choose_join_path' && onChooseJoinPath && (
-                  <span className="mt-1.5 flex flex-wrap gap-1.5">
-                    {(item.fix.options as JoinEdge[][]).map((option, choice) => (
+                  <span className="mt-1.5 flex flex-wrap gap-2">
+                    {distinctPaths(item.fix.options as JoinEdge[][]).map((option, choice) => (
                       <button
                         key={choice}
                         type="button"
                         onClick={() => onChooseJoinPath(option)}
-                        className="rounded border border-accent-border bg-white px-2 py-1
-                                   text-2xs font-medium text-accent transition-colors
-                                   hover:bg-accent hover:text-white"
+                        className="group rounded-lg border border-accent-border bg-white px-2.5 py-1.5
+                                   text-left transition-colors hover:border-accent hover:bg-accent-soft"
                         title="Use this path"
                       >
-                        {describePath(option)}
+                        <span className="block text-2xs font-semibold text-accent">
+                          {describePath(option)}
+                        </span>
+                        {/* Two routes can visit the same tables and still mean
+                            different things, so the join keys decide it. */}
+                        <span className="mt-0.5 block font-mono text-[10px] text-ink-muted">
+                          {option
+                            .map((e) => `${e.from_table}.${e.from_column} = ${e.to_table}.${e.to_column}`)
+                            .join('  ·  ')}
+                        </span>
                       </button>
                     ))}
                   </span>
@@ -131,6 +139,25 @@ export function DiagnosticsBar({
       )}
     </div>
   );
+}
+
+/**
+ * Drop options that are the same join in the same order.
+ *
+ * Distinct routes may visit identical tables -- two entities can reference each
+ * other both ways -- and those must be kept, since they answer different
+ * questions. Only genuinely identical ones are removed.
+ */
+function distinctPaths(options: JoinEdge[][]): JoinEdge[][] {
+  const seen = new Set<string>();
+  return options.filter((option) => {
+    const signature = option
+      .map((e) => `${e.from_table}.${e.from_column}>${e.to_table}.${e.to_column}`)
+      .join('|');
+    if (seen.has(signature)) return false;
+    seen.add(signature);
+    return true;
+  });
 }
 
 /** `customers → orders → invoices`, so each option is readable at a glance. */
