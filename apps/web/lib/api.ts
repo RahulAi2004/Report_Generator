@@ -92,6 +92,57 @@ export const api = {
       { definition, parameters },
     ),
 
+  /** Total rows the report returns, ignoring paging. Null when too costly. */
+  count: (definition: ReportDefinition, parameters: Record<string, unknown> = {}) =>
+    post<{ total: number | null; reason?: string }>('/reports/count', {
+      definition,
+      parameters,
+    }),
+
+  /**
+   * Download the full report.
+   *
+   * The response is a file, not JSON, so this bypasses `request` and drives the
+   * browser's own download rather than buffering the whole thing in a string.
+   */
+  export: async (
+    definition: ReportDefinition,
+    format: 'csv' | 'xlsx' | 'pdf',
+    reportName: string,
+    parameters: Record<string, unknown> = {},
+  ): Promise<void> => {
+    const response = await fetch(`${BASE}/reports/export`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ definition, parameters, format, report_name: reportName }),
+    });
+
+    if (!response.ok) {
+      let detail = 'The export could not be produced.';
+      try {
+        detail = (await response.json()).detail ?? detail;
+      } catch {
+        /* not JSON */
+      }
+      throw new ApiError(detail, response.status);
+    }
+
+    const disposition = response.headers.get('content-disposition') ?? '';
+    const match = disposition.match(/filename="?([^"]+)"?/);
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = match?.[1] ?? `report.${format}`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    // Revoking immediately can cancel the download in some browsers.
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  },
+
   // -- saved reports ------------------------------------------------------
   listReports: () => request<{ reports: SavedReportSummary[] }>('/reports'),
   getReport: (id: string) =>

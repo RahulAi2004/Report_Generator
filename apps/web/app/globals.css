@@ -33,10 +33,11 @@
     @apply rounded-lg border border-line bg-white shadow-panel;
   }
   .panel-header {
-    @apply flex items-center justify-between border-b border-line px-4 py-2.5;
+    @apply flex items-center justify-between gap-2 border-b border-line
+           bg-gradient-to-b from-white to-canvas/60 px-4 py-2.5;
   }
   .panel-title {
-    @apply text-xs font-semibold uppercase tracking-wide text-ink-muted;
+    @apply text-xs font-bold uppercase tracking-wide text-ink-muted;
   }
 
   .btn {
@@ -44,13 +45,16 @@
            text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50;
   }
   .btn-default {
-    @apply border-line bg-white text-ink hover:bg-canvas;
+    @apply border-line bg-white text-ink shadow-sm hover:border-line-strong hover:bg-canvas
+           active:translate-y-px;
   }
   .btn-primary {
-    @apply border-accent bg-accent text-white hover:bg-accent-hover hover:border-accent-hover;
+    @apply border-accent bg-accent text-white shadow-sm hover:bg-accent-hover
+           hover:border-accent-hover active:translate-y-px;
   }
   .btn-ghost {
-    @apply border-transparent bg-transparent text-ink-muted hover:bg-canvas hover:text-ink;
+    @apply border-transparent bg-transparent text-ink-muted
+           hover:bg-accent-soft hover:text-accent;
   }
   .btn-sm {
     @apply px-2 py-1 text-xs;
@@ -58,7 +62,8 @@
 
   .field {
     @apply w-full rounded border border-line bg-white px-2.5 py-1.5 text-sm text-ink
-           outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/15
+           outline-none transition placeholder:text-ink-faint
+           hover:border-line-strong focus:border-accent focus:ring-2 focus:ring-accent/20
            disabled:bg-canvas disabled:text-ink-faint;
   }
   select.field {
@@ -76,10 +81,33 @@
   }
 
   .row-hover {
-    @apply transition-colors hover:bg-accent-soft/60;
+    @apply transition-colors hover:bg-accent-soft;
+  }
+  /* Striping makes a wide result grid far easier to read across. */
+  .striped tbody tr:nth-child(even) {
+    @apply bg-canvas/70;
+  }
+  .striped tbody tr:hover {
+    @apply bg-accent-soft;
   }
 
   .skeleton {
     @apply animate-pulse rounded bg-line/70;
+  }
+}
+
+@layer components {
+  /* Dropdown surface shared by the download and row menus. */
+  .menu {
+    @apply absolute right-0 z-50 mt-1 min-w-[190px] overflow-hidden rounded-lg
+           border border-line bg-white py-1 shadow-pop;
+  }
+  .menu-item {
+    @apply flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm text-ink
+           transition-colors hover:bg-accent-soft hover:text-accent
+           disabled:cursor-not-allowed disabled:text-ink-faint disabled:hover:bg-transparent;
+  }
+  .menu-sep {
+    @apply my-1 border-t border-line;
   }
 }

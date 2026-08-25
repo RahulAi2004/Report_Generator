@@ -9,13 +9,15 @@ rather than after a confusing result set comes back.
 
 from __future__ import annotations
 
+import re
 import time
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
 import sqlalchemy as sa
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session as DbSession
 
@@ -26,6 +28,7 @@ from app.core.db import get_session
 from app.core.deps import client_ip, current_principal, require, write_audit
 from app.core.security import Permission, Principal
 from app.domain.report.engine import EngineOptions, ReportEngine
+from app.domain.report import exporters
 from app.domain.report.ir import ReportDefinition
 from app.models.metadata_models import QueryHistory, Report, ReportRun
 from app.services import schema_service
@@ -223,6 +226,139 @@ def generated_sql(
         "joins": result.plan.as_dict()["steps"] if result.plan else [],
         "row_limit": result.compiled.limit,
     }
+
+
+# ---------------------------------------------------------------------------
+# Total row count and exports
+# ---------------------------------------------------------------------------
+@router.post("/count")
+def total_rows(
+    payload: PreviewRequest,
+    db: DbSession = Depends(get_session),
+    principal: Principal = Depends(require(Permission.RUN_REPORT)),
+):
+    """
+    Total rows the report would return, ignoring paging.
+
+    A separate endpoint on purpose: counting means a second pass over the data,
+    which is wasted work while someone is still adjusting columns. The builder
+    asks for it once the preview settles, and the paginator degrades to
+    "next page / previous page" if it is unavailable.
+    """
+    engine = _engine(db, principal)
+    result = engine.build(payload.definition, payload.parameters, limit=1)
+    if not result.ok:
+        raise HTTPException(status_code=400, detail="This report is not valid yet.")
+
+    adapter = get_adapter()
+    inner = result.compiled.statement.limit(None).offset(None).order_by(None)
+    counter = sa.select(sa.func.count()).select_from(inner.subquery("counted"))
+
+    try:
+        outcome = adapter.execute(counter, max_rows=1)
+    except QueryExecutionError as error:
+        # Not being able to count is not a reason to fail the report.
+        return {"total": None, "reason": str(error)}
+
+    total = outcome.rows[0][0] if outcome.rows else None
+    return {"total": int(total) if total is not None else None}
+
+
+class ExportRequest(PreviewRequest):
+    format: str = Field(default="csv", pattern="^(csv|xlsx|pdf)$")
+    report_name: str = Field(default="report", max_length=120)
+
+
+@router.post("/export")
+def export_report(
+    payload: ExportRequest,
+    request: Request,
+    db: DbSession = Depends(get_session),
+    principal: Principal = Depends(require(Permission.EXPORT_DATA)),
+):
+    """
+    Download the full report (spec 15).
+
+    CSV streams straight from a server-side cursor, so file size is bounded by
+    the governor rather than by memory. XLSX and PDF have to be assembled before
+    they can be sent, so they are capped.
+    """
+    engine = _engine(db, principal)
+    limit = settings.query_max_rows
+    if payload.format == "pdf":
+        limit = min(limit, exporters.MAX_PDF_ROWS)
+
+    result = engine.build(payload.definition, payload.parameters, limit=limit)
+    if not result.ok:
+        raise HTTPException(
+            status_code=400,
+            detail="This report cannot be exported until the issues shown are resolved.",
+        )
+
+    adapter = get_adapter()
+    columns = result.compiled.output_columns
+    headers = [column.display_name for column in columns]
+    safe_name = re.sub(r"[^A-Za-z0-9_-]+", "_", payload.report_name).strip("_") or "report"
+    stamp = datetime.now().strftime("%Y%m%d_%H%M")
+    filename = f"{safe_name}_{stamp}.{payload.format}"
+
+    write_audit(
+        db, principal, "export_performed", ip=client_ip(request),
+        payload={"format": payload.format, "tables": result.compiled.tables_used},
+    )
+
+    def row_stream():
+        for _, chunk in adapter.stream(result.compiled.statement, chunk_size=2_000):
+            yield from chunk
+
+    disposition = {"Content-Disposition": f'attachment; filename="{filename}"'}
+
+    try:
+        if payload.format == "csv":
+            return StreamingResponse(
+                exporters.to_csv(headers, row_stream()),
+                media_type="text/csv; charset=utf-8",
+                headers=disposition,
+            )
+
+        rows = list(row_stream())
+        if payload.format == "xlsx":
+            content = exporters.to_xlsx(
+                headers, rows, sheet_name=payload.report_name,
+                number_formats=[_number_format(column) for column in columns],
+            )
+            media = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        else:
+            content = exporters.to_pdf(
+                headers, rows, title=payload.report_name,
+                subtitle=f"{len(rows):,} rows · generated {datetime.now():%d %b %Y %H:%M}",
+            )
+            media = "application/pdf"
+    except QueryExecutionError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+    return Response(content=content, media_type=media, headers=disposition)
+
+
+def _number_format(column) -> str | None:
+    """Carry the report's formatting into the spreadsheet."""
+    fmt = column.format
+    if fmt is None:
+        return None
+    decimals = "0" * fmt.decimals
+    tail = f".{decimals}" if fmt.decimals else ""
+    match fmt.kind:
+        case "currency":
+            return f'#,##0{tail}'
+        case "number":
+            return f'#,##0{tail}' if fmt.thousands_separator else f'0{tail}'
+        case "percent":
+            return f'0{tail}"%"'
+        case "date":
+            return "dd mmm yyyy"
+        case "datetime":
+            return "dd mmm yyyy hh:mm"
+    return None
 
 
 # ---------------------------------------------------------------------------

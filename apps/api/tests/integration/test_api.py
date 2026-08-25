@@ -434,3 +434,78 @@ def test_blank_boolean_env_var_does_not_crash_startup():
     )
     assert settings.session_cookie_secure is None
     assert settings.cookies_are_secure is False
+
+
+# ---------------------------------------------------------------------------
+# Total count and exports
+# ---------------------------------------------------------------------------
+def test_total_count_is_reported(client, admin):
+    body = client.post("/api/v1/reports/count", headers=admin,
+                       json={"definition": SIMPLE_REPORT}).json()
+    assert isinstance(body["total"], int)
+    assert body["total"] > 0
+
+
+def test_count_ignores_the_page_limit(client, admin):
+    """The count is of the whole result, not of one page."""
+    definition = {**SIMPLE_REPORT, "row_limit": 5}
+    total = client.post("/api/v1/reports/count", headers=admin,
+                        json={"definition": definition}).json()["total"]
+    page = client.post("/api/v1/reports/preview", headers=admin,
+                       json={"definition": definition, "page_size": 5}).json()
+    assert len(page["rows"]) == 5
+    assert total > 5
+
+
+@pytest.mark.parametrize(
+    "fmt,media,magic",
+    [
+        ("csv", "text/csv", b"\xef\xbb\xbf"),   # BOM, so Excel reads UTF-8
+        ("xlsx", "spreadsheet", b"PK"),
+        ("pdf", "application/pdf", b"%PDF-"),
+    ],
+)
+def test_export_produces_a_real_file(client, admin, fmt, media, magic):
+    """
+    Exercises the streaming path against a real database. Applying the
+    server-side cursor to the whole connection once wrapped the session guards
+    in a DECLARE CURSOR, which is a syntax error -- so every export failed and
+    nothing caught it until this test existed.
+    """
+    response = client.post(
+        "/api/v1/reports/export",
+        headers=admin,
+        json={"definition": SIMPLE_REPORT, "format": fmt, "report_name": "Customer List"},
+    )
+    assert response.status_code == 200, response.text
+    assert media in response.headers["content-type"]
+    assert response.content.startswith(magic)
+    assert "attachment;" in response.headers["content-disposition"]
+    assert "Customer_List" in response.headers["content-disposition"]
+
+
+def test_export_requires_the_export_permission(client):
+    headers = auth(client, VIEWER)
+    response = client.post(
+        "/api/v1/reports/export",
+        headers=headers,
+        json={"definition": SIMPLE_REPORT, "format": "csv"},
+    )
+    assert response.status_code == 403
+
+
+def test_export_filename_cannot_escape_the_download(client, admin):
+    """A report name is user input and ends up in a Content-Disposition header."""
+    response = client.post(
+        "/api/v1/reports/export",
+        headers=admin,
+        json={
+            "definition": SIMPLE_REPORT,
+            "format": "csv",
+            "report_name": '../../etc/passwd"; drop',
+        },
+    )
+    assert response.status_code == 200
+    disposition = response.headers["content-disposition"]
+    assert ".." not in disposition
+    assert "/" not in disposition.split("filename=")[1]

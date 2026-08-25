@@ -154,14 +154,33 @@ class DatabaseAdapter(ABC):
     def stream(
         self, statement, chunk_size: int = 5_000, parameters: dict[str, Any] | None = None
     ) -> Iterator[tuple[list[str], list[tuple]]]:
-        """Server-side cursor for exports -- never materializes the full result set."""
-        with self.engine.connect().execution_options(stream_results=True) as connection:
-            for guard in self.session_guards():
-                connection.execute(sa.text(guard))
-            cursor = connection.execute(statement, parameters or {})
-            columns = list(cursor.keys())
-            while chunk := cursor.fetchmany(chunk_size):
-                yield columns, [tuple(row) for row in chunk]
+        """
+        Server-side cursor for exports -- never materialises the full result set.
+
+        Streaming is applied to the SELECT alone. Setting it on the connection
+        put the session guards inside a DECLARE CURSOR as well, and `DECLARE ...
+        CURSOR FOR SET SESSION CHARACTERISTICS` is a syntax error, so every
+        export failed the moment it touched a real database.
+        """
+        try:
+            with self.engine.connect() as connection:
+                for guard in self.session_guards():
+                    connection.execute(sa.text(guard))
+
+                cursor = connection.execute(
+                    statement.execution_options(stream_results=True, max_row_buffer=chunk_size),
+                    parameters or {},
+                )
+                columns = list(cursor.keys())
+                while chunk := cursor.fetchmany(chunk_size):
+                    yield columns, [tuple(row) for row in chunk]
+        except Exception as error:
+            translated = self.translate_error(error)
+            logger.error(
+                "Export stream failed (%s): %s", translated.kind, translated.detail or error,
+                exc_info=True,
+            )
+            raise translated from error
 
     def explain_cost(self, statement) -> float | None:
         """Estimated cost, when the engine can produce one cheaply. None if unsupported."""

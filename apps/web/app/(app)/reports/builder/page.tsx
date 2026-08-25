@@ -1,5 +1,7 @@
 'use client';
 
+import clsx from 'clsx';
+
 import { useMutation, useQueries, useQuery } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ColumnGrid } from '@/components/builder/ColumnGrid';
@@ -8,7 +10,9 @@ import { DataSourcePanel } from '@/components/builder/DataSourcePanel';
 import { DiagnosticsBar } from '@/components/builder/DiagnosticsBar';
 import { FieldPanel } from '@/components/builder/FieldPanel';
 import { JoinCanvas } from '@/components/builder/JoinCanvas';
+import { RelationshipsDialog } from '@/components/builder/RelationshipsDialog';
 import { PreviewTable } from '@/components/builder/PreviewTable';
+import { FileIcon, Menu, MenuItem, MenuSeparator } from '@/components/ui/Menu';
 import { QueryPanels } from '@/components/builder/QueryPanels';
 import { WorkflowCards } from '@/components/builder/WorkflowCards';
 import { Badge, Button } from '@/components/ui/primitives';
@@ -35,9 +39,13 @@ export default function BuilderPage() {
 
   const [validation, setValidation] = useState<ValidationResult | null>(null);
   const [preview, setPreview] = useState<PreviewResult | null>(null);
+  const [totalRows, setTotalRows] = useState<number | null>(null);
+  const [exporting, setExporting] = useState<string | null>(null);
+  const [lastModified, setLastModified] = useState('Not saved yet');
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
+  const [joinsOpen, setJoinsOpen] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const [sqlOpen, setSqlOpen] = useState(false);
   const [activeSection, setActiveSection] = useState<string>();
@@ -128,6 +136,42 @@ export default function BuilderPage() {
 
   const previewMutation = useMutation({ mutationFn: () => runPreview(page, pageSize) });
 
+  /**
+   * Counting is a second pass over the data, so it is requested explicitly
+   * rather than on every keystroke. A null total simply hides the figure --
+   * the paginator still works from "is there another page".
+   */
+  const countMutation = useMutation({
+    mutationFn: () => api.count(definition),
+    onSuccess: (result) => {
+      setTotalRows(result.total);
+      if (result.total === null) {
+        setToast('Could not count the rows for this report');
+        setTimeout(() => setToast(null), 2600);
+      }
+    },
+    onError: () => setTotalRows(null),
+  });
+
+  const runExport = useCallback(
+    async (format: 'csv' | 'xlsx' | 'pdf') => {
+      setExporting(format);
+      setToast(`Preparing ${format.toUpperCase()}…`);
+      try {
+        await api.export(definition, format, reportName || 'report');
+        setToast(`${format.toUpperCase()} downloaded`);
+      } catch (caught) {
+        setToast(
+          caught instanceof ApiError ? caught.message : 'The export could not be produced.',
+        );
+      } finally {
+        setExporting(null);
+        setTimeout(() => setToast(null), 3200);
+      }
+    },
+    [definition, reportName],
+  );
+
   const saveMutation = useMutation({
     mutationFn: async () => {
       if (builder.reportId) {
@@ -137,6 +181,12 @@ export default function BuilderPage() {
     },
     onSuccess: (saved) => {
       builder.loadReport(saved.id, saved.name, definition);
+      setLastModified(
+        new Date().toLocaleString(undefined, {
+          day: 'numeric', month: 'short', year: 'numeric',
+          hour: 'numeric', minute: '2-digit',
+        }),
+      );
       setToast(`Saved “${saved.name}”`);
       setTimeout(() => setToast(null), 2600);
     },
@@ -154,6 +204,10 @@ export default function BuilderPage() {
       .getElementById(`section-${section}`)
       ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
   };
+
+  // A changed definition means a different result set, so a total computed for
+  // the old one would be quietly wrong.
+  useEffect(() => setTotalRows(null), [definition]);
 
   const summary = summarize(definition);
   const selectedFields = useMemo(
@@ -218,12 +272,48 @@ export default function BuilderPage() {
           </Button>
           <Button
             size="sm"
-            onClick={() => setSqlOpen(true)}
-            disabled={!can('view_sql') || hasErrors}
-            title={can('view_sql') ? 'Inspect generated SQL' : 'Your role cannot view SQL'}
+            onClick={() => previewMutation.mutate()}
+            disabled={previewMutation.isPending || definition.columns.length === 0}
+            title="Run and scroll to the results"
           >
-            View SQL
+            Preview
           </Button>
+
+          <Menu
+            trigger={({ open, toggle }) => (
+              <Button size="sm" onClick={toggle} disabled={!can('export_data') || hasErrors}
+                      title={can('export_data') ? 'Download this report' : 'Your role cannot export data'}>
+                <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none"
+                     stroke="currentColor" strokeWidth={1.8}>
+                  <path d="M12 3v12M7 11l5 5 5-5M4 19h16" />
+                </svg>
+                Download
+                <svg viewBox="0 0 24 24"
+                     className={clsx('h-3 w-3 transition-transform', open && 'rotate-180')}
+                     fill="none" stroke="currentColor" strokeWidth={2.5}>
+                  <path d="m6 9 6 6 6-6" />
+                </svg>
+              </Button>
+            )}
+          >
+            {({ close }) => (
+              <>
+                <MenuItem icon={FileIcon.pdf}
+                          onClick={() => { close(); runExport('pdf'); }}>
+                  Export as PDF
+                </MenuItem>
+                <MenuItem icon={FileIcon.csv}
+                          onClick={() => { close(); runExport('csv'); }}>
+                  Export as CSV
+                </MenuItem>
+                <MenuItem icon={FileIcon.xlsx}
+                          onClick={() => { close(); runExport('xlsx'); }}>
+                  Export as Excel
+                </MenuItem>
+              </>
+            )}
+          </Menu>
+
           <Button
             size="sm"
             variant="primary"
@@ -235,6 +325,51 @@ export default function BuilderPage() {
             </svg>
             {previewMutation.isPending ? 'Running…' : 'Run Report'}
           </Button>
+
+          <Menu
+            trigger={({ toggle }) => (
+              <button type="button" onClick={toggle} title="More actions"
+                      className="inline-flex h-7 w-7 items-center justify-center rounded
+                                 text-ink-muted transition-colors hover:bg-canvas hover:text-ink">
+                <svg viewBox="0 0 24 24" className="h-4 w-4" fill="currentColor">
+                  <circle cx="12" cy="5" r="1.6" /><circle cx="12" cy="12" r="1.6" />
+                  <circle cx="12" cy="19" r="1.6" />
+                </svg>
+              </button>
+            )}
+          >
+            {({ close }) => (
+              <>
+                <MenuItem
+                  onClick={() => { close(); setSqlOpen(true); }}
+                  disabled={!can('view_sql') || hasErrors}
+                  hint={can('view_sql') ? undefined : 'Your role cannot view SQL'}
+                >
+                  View generated SQL
+                </MenuItem>
+                <MenuItem onClick={() => { close(); countMutation.mutate(); }}
+                          disabled={hasErrors}>
+                  Count total rows
+                </MenuItem>
+                <MenuSeparator />
+                <MenuItem onClick={() => {
+                  close();
+                  builder.reset();
+                  setPreview(null);
+                  setTotalRows(null);
+                }}>
+                  Start a new report
+                </MenuItem>
+              </>
+            )}
+          </Menu>
+
+          <div className="ml-1 hidden shrink-0 border-l border-line pl-3 text-right xl:block">
+            <span className="block text-2xs text-ink-faint">Last Modified</span>
+            <span className="block text-xs font-medium text-ink-muted">
+              {lastModified}
+            </span>
+          </div>
         </div>
       </header>
 
@@ -273,12 +408,17 @@ export default function BuilderPage() {
             onUpdate={builder.updateColumn}
             onRemove={builder.removeColumn}
             onMove={builder.moveColumn}
+            onAddColumn={(table, field) => {
+              const meta = tables[table]?.columns?.find((c) => c.name === field);
+              if (meta) builder.addColumn(table, meta);
+            }}
           />
 
           <JoinCanvas
             validation={validation}
             primaryTable={definition.primary_table}
             labels={labels}
+            onEditRelationships={() => setJoinsOpen(true)}
           />
 
           <QueryPanels
@@ -313,6 +453,9 @@ export default function BuilderPage() {
             onRefresh={() => previewMutation.mutate()}
             fullscreen={fullscreen}
             onToggleFullscreen={() => setFullscreen((value) => !value)}
+            totalRows={totalRows}
+            onCount={() => countMutation.mutate()}
+            counting={countMutation.isPending}
           />
         </main>
 
@@ -332,6 +475,32 @@ export default function BuilderPage() {
           onClose={() => setSqlOpen(false)}
         />
       )}
+      <RelationshipsDialog
+        open={joinsOpen}
+        onClose={() => setJoinsOpen(false)}
+        validation={validation}
+        labels={labels}
+        onSetJoinType={(step, joinType) => {
+          // Persist the chosen type as an explicit join. The planner honours
+          // declared joins over the path it would have picked itself.
+          const existing = definition.joins.filter(
+            (join) =>
+              !(join.left_table === step.from_table && join.right_table === step.to_table),
+          );
+          builder.setJoins([
+            ...existing,
+            {
+              left_table: step.from_table,
+              left_column: step.from_column,
+              right_table: step.to_table,
+              right_column: step.to_column,
+              join_type: joinType,
+              relationship_id: step.relationship_id,
+            },
+          ]);
+        }}
+      />
+
 
       {toast && (
         <div className="fixed bottom-4 right-4 z-50 rounded border border-good-border

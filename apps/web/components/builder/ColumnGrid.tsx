@@ -20,6 +20,7 @@ export function ColumnGrid({
   onUpdate,
   onRemove,
   onMove,
+  onAddColumn,
 }: {
   columns: ReportColumn[];
   tables: Record<string, SchemaTable>;
@@ -28,16 +29,57 @@ export function ColumnGrid({
   onUpdate: (id: string, patch: Partial<ReportColumn>) => void;
   onRemove: (id: string) => void;
   onMove: (id: string, direction: -1 | 1) => void;
+  onAddColumn?: (table: string, field: string) => void;
 }) {
+  const chosen = new Set(columns.map((column) => `${column.table}.${column.field}`));
+  const addable = Object.values(tables).flatMap((table) =>
+    (table.columns ?? [])
+      .filter((column) => !chosen.has(`${table.name}.${column.name}`))
+      .map((column) => ({
+        value: `${table.name}.${column.name}`,
+        label: `${table.label} · ${column.name}`,
+      })),
+  );
   return (
     <section id="section-columns" className="panel">
       <div className="panel-header">
-        <h2 className="panel-title">Report Columns</h2>
-        <span className="text-2xs text-ink-faint">
-          {columns.length === 0
-            ? 'Tick fields on the left to add columns'
-            : `${columns.length} column${columns.length === 1 ? '' : 's'}`}
-        </span>
+        <div className="flex items-center gap-2">
+          <h2 className="panel-title">Report Columns</h2>
+          <span className="text-2xs text-ink-faint">
+            {columns.length === 0
+              ? 'Tick fields on the left to add columns'
+              : `${columns.length} column${columns.length === 1 ? '' : 's'}`}
+          </span>
+        </div>
+
+        {/* Same result as ticking a field, for anyone who looks for a button. */}
+        <div className="relative">
+          <select
+            value=""
+            disabled={addable.length === 0}
+            onChange={(event) => {
+              if (!event.target.value) return;
+              const [table, field] = event.target.value.split('.');
+              onAddColumn?.(table, field);
+              event.target.value = '';
+            }}
+            aria-label="Add column"
+            className="absolute inset-0 cursor-pointer opacity-0 disabled:cursor-not-allowed"
+          >
+            <option value="" />
+            {addable.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+          <span className="btn btn-default btn-sm pointer-events-none">
+            <svg viewBox="0 0 24 24" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth={2.5}>
+              <path d="M12 5v14M5 12h14" />
+            </svg>
+            Add Column
+          </span>
+        </div>
       </div>
 
       {columns.length === 0 ? (
@@ -47,7 +89,7 @@ export function ColumnGrid({
         />
       ) : (
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[680px] border-collapse">
+          <table className="striped w-full min-w-[680px] border-collapse">
             <thead>
               <tr className="border-b border-line text-left text-2xs uppercase tracking-wide text-ink-faint">
                 <th className="w-8 px-2 py-2" />

@@ -22,6 +22,9 @@ export function PreviewTable({
   onRefresh,
   fullscreen,
   onToggleFullscreen,
+  totalRows,
+  onCount,
+  counting,
 }: {
   result: PreviewResult | null;
   loading: boolean;
@@ -33,8 +36,14 @@ export function PreviewTable({
   onRefresh: () => void;
   fullscreen: boolean;
   onToggleFullscreen: () => void;
+  /** Null until counted -- counting is a second pass and is requested explicitly. */
+  totalRows?: number | null;
+  onCount?: () => void;
+  counting?: boolean;
 }) {
-  const columns = result?.columns.filter(() => true) ?? [];
+  const pageCount =
+    totalRows != null && pageSize > 0 ? Math.max(1, Math.ceil(totalRows / pageSize)) : null;
+  const columns = result?.columns ?? [];
 
   return (
     <section
@@ -127,7 +136,7 @@ export function PreviewTable({
         )}
 
         {!loading && !error && result && result.rows.length > 0 && (
-          <table className="w-full border-collapse">
+          <table className="striped w-full border-collapse">
             <thead className="sticky top-0 z-10 bg-canvas">
               <tr className="border-b border-line">
                 {columns.map((column) => (
@@ -171,34 +180,146 @@ export function PreviewTable({
         )}
       </div>
 
-      <div className="flex items-center justify-between border-t border-line px-4 py-2">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line
+                      bg-gradient-to-b from-white to-canvas/60 px-4 py-2">
         <span className="text-xs text-ink-muted">
-          {result
-            ? `Page ${result.page}${result.has_more ? '' : ' · end of results'}`
-            : '—'}
+          {totalRows != null ? (
+            <>
+              Total Rows: <strong className="tabular text-ink">{totalRows.toLocaleString()}</strong>
+            </>
+          ) : result ? (
+            <>
+              Page {result.page}
+              {result.has_more ? '' : ' · end of results'}
+              {onCount && (
+                <button
+                  type="button"
+                  onClick={onCount}
+                  disabled={counting}
+                  className="ml-2 font-medium text-accent hover:underline disabled:opacity-50"
+                >
+                  {counting ? 'counting…' : 'count total'}
+                </button>
+              )}
+            </>
+          ) : (
+            '—'
+          )}
         </span>
-        <div className="flex items-center gap-1">
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={page <= 1 || loading}
-            onClick={() => onPageChange(page - 1)}
-          >
-            Previous
-          </Button>
-          <span className="rounded border border-accent bg-accent px-2 py-1 text-xs text-white tabular">
-            {page}
-          </span>
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={!result?.has_more || loading}
-            onClick={() => onPageChange(page + 1)}
-          >
-            Next
-          </Button>
-        </div>
+
+        <Paginator
+          page={page}
+          pageCount={pageCount}
+          hasMore={Boolean(result?.has_more)}
+          disabled={loading}
+          onPageChange={onPageChange}
+        />
       </div>
     </section>
   );
+}
+
+
+/**
+ * Numbered pagination.
+ *
+ * Falls back to previous/next when the total is unknown: without a count there
+ * is no last page to show, and inventing one would be worse than omitting it.
+ */
+function Paginator({
+  page,
+  pageCount,
+  hasMore,
+  disabled,
+  onPageChange,
+}: {
+  page: number;
+  pageCount: number | null;
+  hasMore: boolean;
+  disabled: boolean;
+  onPageChange: (page: number) => void;
+}) {
+  const arrow = (d: string) => (
+    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth={2.5}>
+      <path d={d} />
+    </svg>
+  );
+
+  return (
+    <div className="flex items-center gap-1">
+      <button
+        type="button"
+        aria-label="Previous page"
+        disabled={page <= 1 || disabled}
+        onClick={() => onPageChange(page - 1)}
+        className="inline-flex h-7 w-7 items-center justify-center rounded border border-line
+                   bg-white text-ink-muted transition-colors hover:border-accent-border
+                   hover:bg-accent-soft hover:text-accent disabled:opacity-40
+                   disabled:hover:border-line disabled:hover:bg-white"
+      >
+        {arrow('m15 6-6 6 6 6')}
+      </button>
+
+      {pageCount === null ? (
+        <span className="rounded border border-accent bg-accent px-2.5 py-1 text-xs font-medium text-white tabular">
+          {page}
+        </span>
+      ) : (
+        pageNumbers(page, pageCount).map((entry, index) =>
+          entry === '…' ? (
+            <span key={`gap-${index}`} className="px-1 text-xs text-ink-faint">
+              …
+            </span>
+          ) : (
+            <button
+              key={entry}
+              type="button"
+              disabled={disabled}
+              onClick={() => onPageChange(entry as number)}
+              aria-current={entry === page ? 'page' : undefined}
+              className={
+                entry === page
+                  ? 'inline-flex h-7 min-w-7 items-center justify-center rounded border border-accent bg-accent px-2 text-xs font-medium text-white tabular'
+                  : 'inline-flex h-7 min-w-7 items-center justify-center rounded border border-line bg-white px-2 text-xs text-ink-muted tabular transition-colors hover:border-accent-border hover:bg-accent-soft hover:text-accent'
+              }
+            >
+              {entry}
+            </button>
+          ),
+        )
+      )}
+
+      <button
+        type="button"
+        aria-label="Next page"
+        disabled={(pageCount === null ? !hasMore : page >= pageCount) || disabled}
+        onClick={() => onPageChange(page + 1)}
+        className="inline-flex h-7 w-7 items-center justify-center rounded border border-line
+                   bg-white text-ink-muted transition-colors hover:border-accent-border
+                   hover:bg-accent-soft hover:text-accent disabled:opacity-40
+                   disabled:hover:border-line disabled:hover:bg-white"
+      >
+        {arrow('m9 6 6 6-6 6')}
+      </button>
+    </div>
+  );
+}
+
+/** `1 2 3 … 24` around the current page, as in the reference. */
+function pageNumbers(current: number, total: number): (number | '…')[] {
+  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
+
+  const pages = new Set<number>([1, total, current]);
+  if (current > 1) pages.add(current - 1);
+  if (current < total) pages.add(current + 1);
+  if (current <= 3) [2, 3, 4].forEach((n) => pages.add(n));
+  if (current >= total - 2) [total - 3, total - 2, total - 1].forEach((n) => pages.add(n));
+
+  const sorted = [...pages].filter((n) => n >= 1 && n <= total).sort((a, b) => a - b);
+  const out: (number | '…')[] = [];
+  sorted.forEach((n, index) => {
+    if (index > 0 && n - sorted[index - 1] > 1) out.push('…');
+    out.push(n);
+  });
+  return out;
 }

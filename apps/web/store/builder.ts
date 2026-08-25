@@ -17,6 +17,7 @@ import type {
   FilterNode,
   ReportColumn,
   ReportDefinition,
+  ReportJoin,
   SchemaColumn,
   SchemaTable,
 } from '@/lib/types';
@@ -60,6 +61,7 @@ interface BuilderState {
   updateSort: (index: number, patch: { column_id?: string; direction?: 'asc' | 'desc' }) => void;
   removeSort: (index: number) => void;
 
+  setJoins: (joins: ReportJoin[]) => void;
   setRowLimit: (limit: number) => void;
   setFanoutCorrection: (enabled: boolean) => void;
 }
@@ -320,6 +322,9 @@ export const useBuilder = create<BuilderState>((set, get) => ({
         sort_by: state.definition.sort_by.filter((_, i) => i !== index),
       },
     })),
+
+  setJoins: (joins) =>
+    set((state) => ({ dirty: true, definition: { ...state.definition, joins } })),
 
   setRowLimit: (limit) =>
     set((state) => ({ dirty: true, definition: { ...state.definition, row_limit: limit } })),

@@ -1,7 +1,7 @@
 'use client';
 
 import clsx from 'clsx';
-import { Badge, EmptyState } from '@/components/ui/primitives';
+import { Badge, Button, EmptyState } from '@/components/ui/primitives';
 import type { JoinStep, ValidationResult } from '@/lib/types';
 
 /**
@@ -18,10 +18,12 @@ export function JoinCanvas({
   validation,
   primaryTable,
   labels,
+  onEditRelationships,
 }: {
   validation: ValidationResult | null;
   primaryTable: string;
   labels: Record<string, string>;
+  onEditRelationships?: () => void;
 }) {
   const plan = validation?.join_plan;
   const steps: JoinStep[] = plan?.steps ?? [];
@@ -35,13 +37,19 @@ export function JoinCanvas({
     <section id="section-joins" className="panel">
       <div className="panel-header">
         <h2 className="panel-title">Relationships (Joins)</h2>
-        <div className="flex items-center gap-3 text-2xs text-ink-faint">
-          <span className="flex items-center gap-1">
+        <div className="flex items-center gap-3">
+          <span className="hidden items-center gap-1 text-2xs text-ink-faint sm:flex">
             <Connector kind="one" /> One
           </span>
-          <span className="flex items-center gap-1">
+          <span className="hidden items-center gap-1 text-2xs text-ink-faint sm:flex">
             <Connector kind="many" /> Many (multiplies rows)
           </span>
+          <Button size="sm" onClick={onEditRelationships} disabled={steps.length === 0}>
+            <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth={1.8}>
+              <path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" />
+            </svg>
+            Edit Relationships
+          </Button>
         </div>
       </div>
 
