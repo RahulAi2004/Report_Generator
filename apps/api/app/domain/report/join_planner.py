@@ -254,11 +254,23 @@ class JoinPlanner:
                     fix={
                         "action": "choose_join_path",
                         "table": best_target,
+                        # Full edges, so the UI can apply a chosen path directly
+                        # rather than asking the user to rebuild it by hand.
                         "options": [
                             [
                                 {
-                                    "from": edge.from_table,
-                                    "to": edge.to_table,
+                                    "from_table": edge.from_table,
+                                    "from_column": edge.relationship.columns_for(
+                                        edge.from_table
+                                    )[0],
+                                    "to_table": edge.to_table,
+                                    "to_column": edge.relationship.columns_for(
+                                        edge.from_table
+                                    )[1],
+                                    "join_type": self._default_join_type(
+                                        edge.relationship,
+                                        edge.relationship.cardinality_from(edge.from_table),
+                                    ).value,
                                     "relationship_id": edge.relationship.id,
                                 }
                                 for edge in option

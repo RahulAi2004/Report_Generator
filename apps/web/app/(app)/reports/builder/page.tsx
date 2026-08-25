@@ -376,7 +376,23 @@ export default function BuilderPage() {
       {/* ---- workflow strip ---- */}
       <WorkflowCards summary={summary} activeSection={activeSection} onNavigate={scrollTo} />
 
-      <DiagnosticsBar diagnostics={diagnostics} onNavigate={scrollTo} />
+      <DiagnosticsBar
+        diagnostics={diagnostics}
+        onNavigate={scrollTo}
+        onChooseJoinPath={(edges) =>
+          builder.setJoins([
+            ...definition.joins,
+            ...edges.map((edge) => ({
+              left_table: edge.from_table,
+              left_column: edge.from_column,
+              right_table: edge.to_table,
+              right_column: edge.to_column,
+              join_type: edge.join_type,
+              relationship_id: edge.relationship_id,
+            })),
+          ])
+        }
+      />
 
       {/* ---- work area ---- */}
       <div className="flex min-h-0 flex-1 overflow-hidden">

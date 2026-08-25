@@ -12,12 +12,24 @@ import type { Diagnostic } from '@/lib/types';
  * strip is that missing surface: it stays visible while the report is built,
  * and a warning about wrong numbers is given the same weight as an error.
  */
+interface JoinEdge {
+  from_table: string;
+  from_column: string;
+  to_table: string;
+  to_column: string;
+  join_type: 'inner' | 'left' | 'right' | 'full';
+  relationship_id: string;
+}
+
 export function DiagnosticsBar({
   diagnostics,
   onNavigate,
+  onChooseJoinPath,
 }: {
   diagnostics: Diagnostic[];
   onNavigate: (section: string) => void;
+  /** Applies one of the candidate paths the planner refused to choose between. */
+  onChooseJoinPath?: (edges: JoinEdge[]) => void;
 }) {
   const [expanded, setExpanded] = useState(true);
 
@@ -80,7 +92,30 @@ export function DiagnosticsBar({
                       : 'bg-accent',
                 )}
               />
-              <span className="text-ink">{item.message}</span>
+              <span className="min-w-0 flex-1">
+                <span className="text-ink">{item.message}</span>
+
+                {/* The planner will not guess between equal paths, so the
+                    choice is offered here rather than left as advice. */}
+                {item.fix?.action === 'choose_join_path' && onChooseJoinPath && (
+                  <span className="mt-1.5 flex flex-wrap gap-1.5">
+                    {(item.fix.options as JoinEdge[][]).map((option, choice) => (
+                      <button
+                        key={choice}
+                        type="button"
+                        onClick={() => onChooseJoinPath(option)}
+                        className="rounded border border-accent-border bg-white px-2 py-1
+                                   text-2xs font-medium text-accent transition-colors
+                                   hover:bg-accent hover:text-white"
+                        title="Use this path"
+                      >
+                        {describePath(option)}
+                      </button>
+                    ))}
+                  </span>
+                )}
+              </span>
+
               {item.section && item.section !== 'general' && (
                 <button
                   type="button"
@@ -96,6 +131,12 @@ export function DiagnosticsBar({
       )}
     </div>
   );
+}
+
+/** `customers → orders → invoices`, so each option is readable at a glance. */
+function describePath(edges: JoinEdge[]): string {
+  if (edges.length === 0) return 'direct';
+  return [edges[0].from_table, ...edges.map((edge) => edge.to_table)].join(' → ');
 }
 
 function Icon({ severity }: { severity: 'error' | 'warning' | 'info' }) {
