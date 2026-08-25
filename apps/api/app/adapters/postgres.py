@@ -50,6 +50,31 @@ class PostgresAdapter(DatabaseAdapter):
         except Exception:
             return {}
 
+    def enum_columns(self, schema: str | None) -> set[tuple[str, str]]:
+        """
+        Columns whose type is a database enum.
+
+        Reflection reports these as VARCHAR, which is close enough for display
+        but wrong for comparison: PostgreSQL has no `order_status = varchar`
+        operator, so every filter on a status column failed until these were
+        identified and cast.
+        """
+        query = sa.text(
+            """
+            SELECT table_name, column_name
+            FROM information_schema.columns
+            WHERE table_schema = :schema AND data_type = 'USER-DEFINED'
+            """
+        )
+        try:
+            with self.engine.connect() as connection:
+                return {
+                    (row.table_name, row.column_name)
+                    for row in connection.execute(query, {"schema": schema or "public"})
+                }
+        except Exception:
+            return set()
+
     def explain_cost(self, statement) -> float | None:
         """
         Pre-flight cost check. A report the planner already thinks is enormous is

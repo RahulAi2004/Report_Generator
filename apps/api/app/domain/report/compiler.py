@@ -487,6 +487,12 @@ class ReportCompiler:
         values = self._effective_values(condition, parameters)
         data_type = condition.meta.data_type
 
+        # An enum column has no comparison operator against a text literal, and
+        # no pattern-matching operator at all. Casting to text gives both, and
+        # is a no-op for columns that are already text.
+        if condition.meta.is_enum:
+            target = sa.cast(target, sa.Text)
+
         # Relative-date operators are resolved in Python, so they arrive at the
         # database as ordinary bound parameters rather than dialect functions.
         if operator in _RELATIVE_DATE_OPERATORS:

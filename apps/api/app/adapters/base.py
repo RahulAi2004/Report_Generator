@@ -238,6 +238,7 @@ class DatabaseAdapter(ABC):
         inspector = sa.inspect(self.engine)
         schema = schema or self.default_schema()
         estimates = self.row_estimates(schema)
+        enums = self.enum_columns(schema)
 
         tables: list[TableMeta] = []
         relationships: list[RelationshipMeta] = []
@@ -273,6 +274,7 @@ class DatabaseAdapter(ABC):
                     nullable=bool(raw.get("nullable", True)),
                     is_primary_key=raw["name"] in pk,
                     is_foreign_key=raw["name"] in fk_columns,
+                    is_enum=(name, raw["name"]) in enums,
                     ordinal=index,
                     description=raw.get("comment"),
                 )
@@ -325,6 +327,10 @@ class DatabaseAdapter(ABC):
     def row_estimates(self, schema: str | None) -> dict[str, int]:
         """Approximate row counts. Never COUNT(*) -- see spec 41."""
         return {}
+
+    def enum_columns(self, schema: str | None) -> set[tuple[str, str]]:
+        """(table, column) pairs backed by a database enum type."""
+        return set()
 
 
 # ---------------------------------------------------------------------------

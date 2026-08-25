@@ -111,6 +111,10 @@ class ColumnMeta:
     nullable: bool = True
     is_primary_key: bool = False
     is_foreign_key: bool = False
+    #: A database ENUM. Reflection reports these as VARCHAR, but PostgreSQL has
+    #: no `enum = varchar` operator, so comparing one to a literal fails unless
+    #: the column is cast first.
+    is_enum: bool = False
     ordinal: int = 0
     display_name: str | None = None
     description: str | None = None
