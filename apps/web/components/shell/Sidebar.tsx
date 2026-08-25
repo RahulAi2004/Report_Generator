@@ -17,7 +17,6 @@ interface Item {
   label: string;
   icon: React.ReactNode;
   ready?: boolean;
-  phase?: string;
 }
 
 const stroke = {
@@ -34,6 +33,12 @@ const icon = (path: React.ReactNode) => (
   </svg>
 );
 
+/**
+ * Only destinations that exist.
+ *
+ * Sections still to be built are omitted entirely rather than shown disabled:
+ * a sidebar full of things that do nothing trains people to ignore it.
+ */
 const NAV: Item[] = [
   {
     href: '/dashboard',
@@ -48,46 +53,16 @@ const NAV: Item[] = [
     icon: icon(<><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M8 9h8M8 13h8M8 17h5" /></>),
   },
   {
-    href: '/query-assistant',
-    label: 'Query Assistant',
-    phase: 'Phase 7',
-    icon: icon(<><path d="M21 15a2 2 0 0 1-2 2H8l-5 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></>),
-  },
-  {
-    href: '/anomalies',
-    label: 'Anomaly Center',
-    phase: 'Phase 8',
-    icon: icon(<><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" /><path d="M12 9v4M12 17h.01" /></>),
+    href: '/uploads',
+    label: 'Uploads',
+    ready: true,
+    icon: icon(<><path d="M12 16V4M7 9l5-5 5 5" /><path d="M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" /></>),
   },
   {
     href: '/data-sources',
     label: 'Data Sources',
     ready: true,
     icon: icon(<><ellipse cx="12" cy="5" rx="9" ry="3" /><path d="M3 5v14c0 1.7 4 3 9 3s9-1.3 9-3V5" /><path d="M3 12c0 1.7 4 3 9 3s9-1.3 9-3" /></>),
-  },
-  {
-    href: '/schedules',
-    label: 'Schedules',
-    phase: 'Phase 10',
-    icon: icon(<><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></>),
-  },
-  {
-    href: '/templates',
-    label: 'Templates',
-    phase: 'Phase 6',
-    icon: icon(<><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /></>),
-  },
-  {
-    href: '/audit-logs',
-    label: 'Audit Logs',
-    phase: 'Phase 10',
-    icon: icon(<><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /><path d="M9 15h6M9 11h3" /></>),
-  },
-  {
-    href: '/settings',
-    label: 'Settings',
-    phase: 'Phase 10',
-    icon: icon(<><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2V21a2 2 0 1 1-4 0v-.1A1.7 1.7 0 0 0 7 19.4a1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0-1.2-2.9H1a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 2.6 7a1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H7a1.7 1.7 0 0 0 1-1.5V1a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 2.9 1.2 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V7a1.7 1.7 0 0 0 1.5 1H23a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" /></>),
   },
 ];
 
@@ -125,18 +100,6 @@ export function Sidebar() {
             </>
           );
 
-          if (!item.ready) {
-            return (
-              <div
-                key={item.href}
-                title={`${item.label} — arrives in ${item.phase}`}
-                className="mx-1.5 mb-0.5 flex cursor-not-allowed flex-col items-center rounded
-                           px-1 py-2 text-rail-muted/45"
-              >
-                {content}
-              </div>
-            );
-          }
 
           return (
             <Link

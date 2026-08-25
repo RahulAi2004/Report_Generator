@@ -509,3 +509,118 @@ def test_export_filename_cannot_escape_the_download(client, admin):
     disposition = response.headers["content-disposition"]
     assert ".." not in disposition
     assert "/" not in disposition.split("filename=")[1]
+
+
+# ---------------------------------------------------------------------------
+# Uploaded datasets
+# ---------------------------------------------------------------------------
+UPLOAD_CSV = (
+    b"Customer ID,Region,Sales Target,Review Date\n"
+    b"1,North,15000.50,2026-01-15\n"
+    b"2,South,22000,2026-02-20\n"
+    b"3,North,9800.75,2026-03-10\n"
+)
+
+
+def _upload(client, headers, content=UPLOAD_CSV, filename="targets.csv"):
+    import io
+
+    return client.post(
+        "/api/v1/uploads",
+        headers=headers,
+        files={"file": (filename, io.BytesIO(content), "text/csv")},
+        data={"name": "Test Targets"},
+    )
+
+
+def test_upload_infers_column_types(client, admin):
+    """
+    An amount stored as text cannot be summed and a date stored as text sorts
+    alphabetically, so types are inferred rather than assumed.
+    """
+    response = _upload(client, admin)
+    assert response.status_code == 200, response.text
+    body = response.json()
+
+    assert body["row_count"] == 3
+    types = {c["name"]: c["data_type"] for c in body["detected"]}
+    assert types["customer_id"] == "integer"
+    assert types["region"] == "text"
+    assert types["sales_target"] == "decimal"
+    assert types["review_date"] == "date"
+
+    # Headings become safe identifiers but keep their original label.
+    labels = {c["name"]: c["label"] for c in body["detected"]}
+    assert labels["customer_id"] == "Customer ID"
+
+    client.delete(f"/api/v1/uploads/{body['id']}", headers=admin)
+
+
+def test_uploaded_dataset_is_queryable_like_any_table(client, admin):
+    body = _upload(client, admin).json()
+    table = body["table_name"]
+    try:
+        catalog = client.get("/api/v1/schema/tables", headers=admin).json()
+        names = {t["name"] for c in catalog["categories"] for t in c["tables"]}
+        assert table in names
+
+        result = client.post(
+            "/api/v1/reports/preview",
+            headers=admin,
+            json={
+                "definition": {
+                    "primary_table": table,
+                    "tables": [table],
+                    "columns": [
+                        {"id": "c1", "table": table, "field": "region"},
+                        {"id": "c2", "table": table, "field": "sales_target",
+                         "aggregation": "sum"},
+                    ],
+                    "group_by": [{"table": table, "field": "region"}],
+                }
+            },
+        ).json()
+        assert result["ok"] is True
+        assert len(result["rows"]) == 2  # North and South
+    finally:
+        client.delete(f"/api/v1/uploads/{body['id']}", headers=admin)
+
+
+def test_upload_rejects_a_file_that_is_not_a_spreadsheet(client, admin):
+    response = _upload(client, admin, content=b"%PDF-1.4 nonsense", filename="notes.pdf")
+    assert response.status_code == 400
+    assert "CSV" in response.json()["detail"]
+
+
+def test_upload_requires_permission(client):
+    headers = auth(client, ANALYST)
+    assert _upload(client, headers).status_code == 403
+
+
+def test_deleting_an_upload_removes_it_from_the_catalogue(client, admin):
+    body = _upload(client, admin).json()
+    table = body["table_name"]
+
+    assert client.delete(f"/api/v1/uploads/{body['id']}", headers=admin).status_code == 200
+
+    catalog = client.get("/api/v1/schema/tables", headers=admin).json()
+    names = {t["name"] for c in catalog["categories"] for t in c["tables"]}
+    assert table not in names
+
+
+def test_column_headings_cannot_inject_sql(client, admin):
+    """Headings come from a user-supplied file and become SQL identifiers."""
+    hostile = (
+        b'"id","x\\"; DROP TABLE users; --","Amount (USD)"\n'
+        b"1,ok,10\n"
+    )
+    response = _upload(client, admin, content=hostile, filename="hostile.csv")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    try:
+        for column in body["detected"]:
+            assert column["name"].replace("_", "").isalnum(), column["name"]
+        # The users table is still there.
+        assert client.get("/api/v1/auth/me", headers=admin).status_code == 200
+    finally:
+        client.delete(f"/api/v1/uploads/{body['id']}", headers=admin)

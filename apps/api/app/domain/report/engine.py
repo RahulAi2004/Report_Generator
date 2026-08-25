@@ -46,6 +46,8 @@ class EngineOptions:
     max_rows: int = 50_000
     max_subquery_depth: int = 4
     dialect: str = "postgresql"
+    #: False when the statement will run against staged temporary tables.
+    qualify_schema: bool = True
 
 
 @dataclass
@@ -111,7 +113,10 @@ class ReportEngine:
             return BuildResult(None, diagnostics.items, plan=plan, fanout=analysis,
                                summary=summary)
 
-        compiled = ReportCompiler(max_rows=self.options.max_rows).compile(
+        compiled = ReportCompiler(
+            max_rows=self.options.max_rows,
+            qualify_schema=self.options.qualify_schema,
+        ).compile(
             resolved=resolved,
             plan=plan,
             analysis=analysis,

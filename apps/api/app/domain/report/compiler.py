@@ -103,8 +103,13 @@ class CompiledReport:
 
 
 class ReportCompiler:
-    def __init__(self, max_rows: int = 50_000) -> None:
+    def __init__(self, max_rows: int = 50_000, qualify_schema: bool = True) -> None:
         self.max_rows = max_rows
+        #: Hybrid execution stages operational tables as session-temporary
+        #: tables and resolves them through search_path, which cannot be
+        #: schema-qualified. Compiling unqualified lets the identical statement
+        #: run against either engine.
+        self.qualify_schema = qualify_schema
         self._tables: dict[str, sa.Table] = {}
         self._metadata = sa.MetaData()
 
@@ -191,7 +196,11 @@ class ReportCompiler:
                 sa.Column(column.name, _SA_TYPES[column.data_type]())
                 for column in meta.columns
             ],
-            schema=meta.schema if meta.schema and meta.schema != "public" else None,
+            schema=(
+                meta.schema
+                if self.qualify_schema and meta.schema and meta.schema != "public"
+                else None
+            ),
         )
         self._tables[meta.name] = table
         return table

@@ -124,6 +124,20 @@ def build_registry(
             )
         )
 
+    # Uploaded spreadsheets are offered alongside database tables. They are
+    # ordinary TableMeta entries, so resolution, join planning, RBAC and the
+    # compiler need no knowledge that they came from a file.
+    from app.services import upload_service
+
+    try:
+        for dataset in upload_service.load_datasets(session):
+            tables.append(upload_service.as_table_meta(dataset))
+    except Exception:
+        # A problem listing uploads must not take the whole schema down.
+        import logging
+
+        logging.getLogger(__name__).warning("Could not list uploads", exc_info=True)
+
     registry = SchemaRegistry(tables, relationships, connection_id)
     if principal is None:
         return registry

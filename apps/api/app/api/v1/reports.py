@@ -31,7 +31,7 @@ from app.domain.report.engine import EngineOptions, ReportEngine
 from app.domain.report import exporters
 from app.domain.report.ir import ReportDefinition
 from app.models.metadata_models import QueryHistory, Report, ReportRun
-from app.services import schema_service
+from app.services import hybrid_executor, schema_service
 
 router = APIRouter(prefix="/reports", tags=["reports"])
 
@@ -52,9 +52,20 @@ class SaveRequest(BaseModel):
     is_template: bool = False
 
 
-def _engine(db: DbSession, principal: Principal) -> ReportEngine:
+def _engine(
+    db: DbSession, principal: Principal, definition: ReportDefinition | None = None
+) -> ReportEngine:
     registry = schema_service.build_registry(db, principal)
     adapter = get_adapter()
+
+    # A report that mixes uploaded files with database tables is executed
+    # against staged temporary tables, which are resolved through search_path
+    # and therefore cannot be schema-qualified.
+    qualify = True
+    if definition is not None:
+        tables = [definition.primary_table, *definition.tables]
+        qualify = not hybrid_executor.needs_hybrid(registry, tables)
+
     return ReportEngine(
         registry,
         EngineOptions(
@@ -62,7 +73,15 @@ def _engine(db: DbSession, principal: Principal) -> ReportEngine:
             max_rows=settings.query_max_rows,
             max_subquery_depth=settings.query_max_subquery_depth + 1,
             dialect=adapter.dialect,
+            qualify_schema=qualify,
         ),
+    )
+
+
+def _run(db: DbSession, principal: Principal, engine: ReportEngine, compiled, max_rows: int):
+    """Execute wherever the report's sources live."""
+    return hybrid_executor.execute(
+        compiled, engine.registry, get_adapter(), max_rows=max_rows
     )
 
 
@@ -100,7 +119,7 @@ def validate(
     principal: Principal = Depends(current_principal),
 ):
     """Compile without executing. Powers the builder's live diagnostics bar."""
-    engine = _engine(db, principal)
+    engine = _engine(db, principal, payload.definition)
     result = engine.build(payload.definition, payload.parameters)
 
     return {
@@ -134,7 +153,7 @@ def preview(
     principal: Principal = Depends(require(Permission.RUN_REPORT)),
 ):
     """Execute the report and return one page of rows (server-side pagination)."""
-    engine = _engine(db, principal)
+    engine = _engine(db, principal, payload.definition)
     offset = (payload.page - 1) * payload.page_size
 
     # Compile for one row beyond the page. The adapter then reports truncation
@@ -155,7 +174,7 @@ def preview(
     adapter = get_adapter()
     started = time.perf_counter()
     try:
-        outcome = adapter.execute(result.compiled.statement, max_rows=payload.page_size)
+        outcome = _run(db, principal, engine, result.compiled, payload.page_size)
     except QueryExecutionError as error:
         # Query history keeps the technical cause; the response carries only the
         # user-safe message.
@@ -210,7 +229,7 @@ def generated_sql(
     Literal values are shown only to users holding `view_query_values`, since a
     filter value can itself be sensitive.
     """
-    engine = _engine(db, principal)
+    engine = _engine(db, principal, payload.definition)
     result = engine.build(payload.definition, payload.parameters)
     if not result.ok:
         raise HTTPException(
@@ -245,7 +264,7 @@ def total_rows(
     asks for it once the preview settles, and the paginator degrades to
     "next page / previous page" if it is unavailable.
     """
-    engine = _engine(db, principal)
+    engine = _engine(db, principal, payload.definition)
     result = engine.build(payload.definition, payload.parameters, limit=1)
     if not result.ok:
         raise HTTPException(status_code=400, detail="This report is not valid yet.")
@@ -255,7 +274,9 @@ def total_rows(
     counter = sa.select(sa.func.count()).select_from(inner.subquery("counted"))
 
     try:
-        outcome = adapter.execute(counter, max_rows=1)
+        outcome = hybrid_executor.execute(
+            _as_compiled(counter, result.compiled), engine.registry, adapter, max_rows=1
+        )
     except QueryExecutionError as error:
         # Not being able to count is not a reason to fail the report.
         return {"total": None, "reason": str(error)}
@@ -283,7 +304,7 @@ def export_report(
     the governor rather than by memory. XLSX and PDF have to be assembled before
     they can be sent, so they are capped.
     """
-    engine = _engine(db, principal)
+    engine = _engine(db, principal, payload.definition)
     limit = settings.query_max_rows
     if payload.format == "pdf":
         limit = min(limit, exporters.MAX_PDF_ROWS)
@@ -338,6 +359,13 @@ def export_report(
         raise HTTPException(status_code=400, detail=str(error)) from error
 
     return Response(content=content, media_type=media, headers=disposition)
+
+
+def _as_compiled(statement, source):
+    """Wrap a derived statement so it routes to the same engines as its source."""
+    from dataclasses import replace
+
+    return replace(source, statement=statement)
 
 
 def _number_format(column) -> str | None:

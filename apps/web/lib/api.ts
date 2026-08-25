@@ -154,6 +154,40 @@ export const api = {
     setTimeout(() => URL.revokeObjectURL(url), 10_000);
   },
 
+  // -- uploaded datasets --------------------------------------------------
+  listUploads: () => request<{ datasets: UploadedDataset[] }>('/uploads'),
+
+  /** Multipart, so this bypasses the JSON helper. */
+  uploadFile: async (file: File, name = '', description = ''): Promise<UploadedDataset> => {
+    const form = new FormData();
+    form.append('file', file);
+    if (name) form.append('name', name);
+    if (description) form.append('description', description);
+
+    const response = await fetch(`${BASE}/uploads`, {
+      method: 'POST',
+      credentials: 'include',
+      body: form, // no Content-Type: the browser sets the multipart boundary
+    });
+    if (!response.ok) {
+      let detail = 'That file could not be uploaded.';
+      try {
+        detail = (await response.json()).detail ?? detail;
+      } catch {
+        /* not JSON */
+      }
+      throw new ApiError(detail, response.status);
+    }
+    return response.json();
+  },
+
+  previewUpload: (id: string) =>
+    request<{ columns: string[]; rows: (string | number | null)[][]; row_count: number }>(
+      `/uploads/${id}/preview`,
+    ),
+  deleteUpload: (id: string) =>
+    request<{ ok: boolean }>(`/uploads/${id}`, { method: 'DELETE' }),
+
   // -- saved reports ------------------------------------------------------
   listReports: () => request<{ reports: SavedReportSummary[] }>('/reports'),
   getReport: (id: string) =>
@@ -202,4 +236,18 @@ export interface RelationshipSuggestion {
   join_type: string;
   confidence: number;
   reason: string;
+}
+
+
+export interface UploadedDataset {
+  id: string;
+  name: string;
+  description: string | null;
+  original_filename: string;
+  table_name: string;
+  row_count: number;
+  column_count: number;
+  columns: { name: string; label: string; data_type: string; nullable: boolean }[];
+  size_bytes: number;
+  created_at: string;
 }

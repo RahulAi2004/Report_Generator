@@ -198,6 +198,33 @@ class ReportRun(Base):
     error_message: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
 
 
+class UploadedDataset(Base):
+    """
+    A spreadsheet somebody uploaded, stored as a real table in this database.
+
+    Kept here rather than in the operational database because that connection is
+    read-only -- and must stay so. The row data lives in its own table in the
+    `uploads` schema; this record is the catalogue entry describing it.
+    """
+
+    __tablename__ = "uploaded_datasets"
+
+    id: Mapped[str] = mapped_column(sa.String(32), primary_key=True, default=new_id)
+    name: Mapped[str] = mapped_column(sa.String(190))
+    description: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+    original_filename: Mapped[str] = mapped_column(sa.String(255))
+    #: Physical table holding the rows. Derived from this record's id, never
+    #: from the uploaded file's name.
+    physical_table: Mapped[str] = mapped_column(sa.String(80))
+    row_count: Mapped[int] = mapped_column(sa.Integer, default=0)
+    #: [{name, label, data_type, nullable}] -- the inferred schema.
+    columns: Mapped[list] = mapped_column(sa.JSON, default=list)
+    size_bytes: Mapped[int] = mapped_column(sa.BigInteger, default=0)
+    status: Mapped[str] = mapped_column(sa.String(20), default="ready")
+    uploaded_by: Mapped[str | None] = mapped_column(sa.String(32), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(sa.DateTime, default=utcnow)
+
+
 # ---------------------------------------------------------------------------
 # Audit and query history (spec 34, 35)
 # ---------------------------------------------------------------------------
