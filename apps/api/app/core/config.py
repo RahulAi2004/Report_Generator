@@ -32,6 +32,14 @@ class Settings(BaseSettings):
     session_absolute_timeout_hours: int = 12
     cors_allowed_origins: str = "http://localhost:3000"
 
+    #: The address users actually type. Used to decide cookie policy.
+    public_origin: str = ""
+    #: Whether to mark the session cookie Secure. Leave unset to infer it from
+    #: PUBLIC_ORIGIN. This must track the real transport, not the environment
+    #: name: a Secure cookie sent over plain HTTP is silently discarded by the
+    #: browser, which looks exactly like a failed login.
+    session_cookie_secure: bool | None = None
+
     # -- Application metadata database (read-write, ours) ------------------
     #: Left blank so development needs no infrastructure: see `metadata_dsn`.
     app_database_url: str = ""
@@ -118,6 +126,14 @@ class Settings(BaseSettings):
                 "production. Set DATA_SOURCE_MODE=live."
             )
         return self
+
+    @property
+    def cookies_are_secure(self) -> bool:
+        """True only when the site is genuinely reached over HTTPS."""
+        if self.session_cookie_secure is not None:
+            return self.session_cookie_secure
+        origin = self.public_origin or self.cors_allowed_origins.split(",")[0]
+        return origin.strip().lower().startswith("https://")
 
     @property
     def cors_origins(self) -> list[str]:

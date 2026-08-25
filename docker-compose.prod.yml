@@ -88,6 +88,11 @@ services:
       APP_DATABASE_URL: postgresql+psycopg://${APP_DB_USER}:${APP_DB_PASSWORD}@metadata-db:5432/${APP_DB_NAME:-bi_metadata}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       CORS_ALLOWED_ORIGINS: ${PUBLIC_ORIGIN:-http://localhost}
+      # Decides whether session cookies are marked Secure. A Secure cookie sent
+      # over plain HTTP is discarded by the browser, so this must reflect how
+      # the site is actually reached.
+      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:-http://localhost}
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-}
 
       # -- Operational database: read-only, outside this stack ---------------
       DATA_SOURCE_MODE: ${DATA_SOURCE_MODE:-live}

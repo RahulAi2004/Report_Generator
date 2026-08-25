@@ -44,6 +44,14 @@ async def lifespan(app: FastAPI):
             logger.critical("REFUSING TO START: %s", error)
             raise
 
+    if settings.environment == "production" and not settings.cookies_are_secure:
+        logger.warning(
+            "Session cookies are NOT marked Secure because this deployment is "
+            "reached over plain HTTP (%s). Sign-in works, but credentials and "
+            "session tokens cross the network unencrypted. Put this behind TLS.",
+            settings.public_origin or "origin not set",
+        )
+
     if settings.data_source_mode == "mock":
         logger.warning(
             "DEVELOPMENT DATA MODE -- serving the seeded demo database, not production."

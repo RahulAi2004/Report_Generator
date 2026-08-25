@@ -91,7 +91,7 @@ def login(
         token,
         httponly=True,
         samesite="lax",
-        secure=settings.environment == "production",
+        secure=settings.cookies_are_secure,
         max_age=settings.session_absolute_timeout_hours * 3600,
         path="/",
     )

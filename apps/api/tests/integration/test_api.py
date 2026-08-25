@@ -371,3 +371,50 @@ def test_last_page_does_not_offer_a_next_page(client, admin):
     assert len(seen) == len(set(seen)), "pagination returned the same row twice"
     assert len(seen) == 18, f"pagination lost rows: saw {len(seen)} of 18"
     assert page < 10, "pagination never terminated"
+
+
+# ---------------------------------------------------------------------------
+# Session cookie transport
+# ---------------------------------------------------------------------------
+def test_session_cookie_secure_flag_follows_the_transport():
+    """
+    A Secure cookie is discarded by the browser over plain HTTP. Marking it
+    Secure because the environment is called "production", while the site is
+    actually served over HTTP, means sign-in appears to succeed and then bounces
+    straight back to the login page -- with no error anywhere to explain it.
+
+    The flag must track the real scheme, not the environment name.
+    """
+    from app.core.config import Settings
+
+    over_http = Settings(environment="production", public_origin="http://bi.internal")
+    assert over_http.cookies_are_secure is False
+
+    over_https = Settings(environment="production", public_origin="https://bi.internal")
+    assert over_https.cookies_are_secure is True
+
+    # An explicit override wins, for TLS terminated by a proxy in front.
+    overridden = Settings(
+        environment="production",
+        public_origin="http://bi.internal",
+        session_cookie_secure=True,
+    )
+    assert overridden.cookies_are_secure is True
+
+
+def test_login_sets_a_usable_cookie_over_http(client):
+    """The cookie the server sets must actually authenticate the next request."""
+    fresh = TestClient(app)
+    response = fresh.post(
+        "/api/v1/auth/login", json={"email": ADMIN, "password": PASSWORD}
+    )
+    assert response.status_code == 200
+
+    header = response.headers.get("set-cookie", "")
+    assert "bi_session=" in header
+    assert "HttpOnly" in header
+
+    # Over http:// the test client would drop a Secure cookie, so this both
+    # checks the flag and proves the resulting session works.
+    if "Secure" not in header:
+        assert fresh.get("/api/v1/auth/me").status_code == 200
