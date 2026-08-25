@@ -1,0 +1,166 @@
+# ---------------------------------------------------------------------------
+# Production stack.
+#
+#   nginx  -> web (Next.js)  -> api (FastAPI) -> metadata-db (application data)
+#                                             -> OPERATIONAL DATABASE (read-only,
+#                                                outside this stack, never here)
+#
+# The operational business database is deliberately NOT a service here. It is
+# yours, it stays where it is, and this stack reaches it read-only over the
+# network using the credentials in .env.production.
+#
+#   docker compose -f docker-compose.prod.yml --env-file .env.production up -d
+# ---------------------------------------------------------------------------
+
+name: bi-prod
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+services:
+  # -- Application metadata database (spec 40) --------------------------------
+  metadata-db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: "${APP_DB_USER:?set APP_DB_USER in .env.production}"
+      POSTGRES_PASSWORD: "${APP_DB_PASSWORD:?set APP_DB_PASSWORD in .env.production}"
+      POSTGRES_DB: ${APP_DB_NAME:-bi_metadata}
+    volumes:
+      - metadata_data:/var/lib/postgresql/data
+      - ./backups:/backups
+    # Not published to the host: only the api container needs to reach it.
+    expose:
+      - "5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${APP_DB_USER} -d ${APP_DB_NAME:-bi_metadata}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    logging: *default-logging
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: >
+      redis-server --save 60 1 --loglevel warning
+      --requirepass "${REDIS_PASSWORD:?set REDIS_PASSWORD in .env.production}"
+    volumes:
+      - redis_data:/data
+    expose:
+      - "6379"
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a $$REDIS_PASSWORD ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    logging: *default-logging
+
+  # -- Backend ---------------------------------------------------------------
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      metadata-db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      ENVIRONMENT: production
+      DEBUG: "false"
+      APP_SECRET: "${APP_SECRET:?APP_SECRET is required - generate one with openssl rand -base64 48}"
+      APP_DATABASE_URL: postgresql+psycopg://${APP_DB_USER}:${APP_DB_PASSWORD}@metadata-db:5432/${APP_DB_NAME:-bi_metadata}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      CORS_ALLOWED_ORIGINS: ${PUBLIC_ORIGIN:-http://localhost}
+
+      # -- Operational database: read-only, outside this stack ---------------
+      DATA_SOURCE_MODE: ${DATA_SOURCE_MODE:-live}
+      DATABASE_TYPE: ${DATABASE_TYPE:-postgresql}
+      DATABASE_HOST: ${DATABASE_HOST}
+      DATABASE_PORT: ${DATABASE_PORT:-5432}
+      DATABASE_NAME: ${DATABASE_NAME}
+      DATABASE_USER: ${DATABASE_USER}
+      DATABASE_PASSWORD: ${DATABASE_PASSWORD}
+      DATABASE_SSL: ${DATABASE_SSL:-require}
+      # The startup self-test refuses to boot if this connection can write.
+      DATABASE_ENFORCE_READ_ONLY: ${DATABASE_ENFORCE_READ_ONLY:-true}
+      DATABASE_IS_REPLICA: ${DATABASE_IS_REPLICA:-false}
+
+      QUERY_TIMEOUT_SECONDS: ${QUERY_TIMEOUT_SECONDS:-30}
+      QUERY_MAX_ROWS: ${QUERY_MAX_ROWS:-50000}
+      WEB_CONCURRENCY: ${WEB_CONCURRENCY:-4}
+
+      AI_ENABLED: ${AI_ENABLED:-false}
+      AI_PROVIDER: ${AI_PROVIDER:-ollama}
+      AI_ENDPOINT: ${AI_ENDPOINT:-}
+      AI_MODEL: ${AI_MODEL:-}
+      AI_API_KEY: ${AI_API_KEY:-}
+    expose:
+      - "8000"
+    # Lets the backend reach an operational database running on the Docker host
+    # itself. Harmless when the database is on another machine.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - api_exports:/app/exports
+    # Nothing in the backend writes to its own filesystem except exports.
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    logging: *default-logging
+
+  # -- Frontend --------------------------------------------------------------
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_started
+    environment:
+      NODE_ENV: production
+      API_ORIGIN: http://api:8000
+    expose:
+      - "3000"
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    logging: *default-logging
+
+  # -- Edge ------------------------------------------------------------------
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    depends_on:
+      - web
+      - api
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    volumes:
+      - ./deploy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./deploy/proxy_headers.conf:/etc/nginx/conf.d/proxy_headers.conf:ro
+      - ./deploy/certs:/etc/nginx/certs:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/healthz || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    logging: *default-logging
+
+volumes:
+  metadata_data:
+  redis_data:
+  api_exports:

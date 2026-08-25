@@ -1,0 +1,71 @@
+# Local development stack. `name` isolates it from the production stack:
+# without it both files derive the same project name from the directory and
+# `compose -f docker-compose.prod.yml stop` would stop these containers too.
+name: bi-dev
+
+services:
+  # ---------------------------------------------------------------------------
+  # Application metadata database (read-write, owned by this application).
+  # Spec 40: never place application data in the operational business database.
+  # ---------------------------------------------------------------------------
+  metadata-db:
+    image: postgres:16-alpine
+    container_name: bi_metadata_db
+    environment:
+      POSTGRES_USER: bi_app
+      POSTGRES_PASSWORD: bi_app_dev_password
+      POSTGRES_DB: bi_metadata
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - metadata_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bi_app -d bi_metadata"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ---------------------------------------------------------------------------
+  # DEVELOPMENT ONLY -- stand-in for the centralized operational database.
+  #
+  # This is a REAL PostgreSQL instance, not fixtures, so introspection, the join
+  # planner, the compiler and the adapter are all exercised for real. Replacing
+  # it with the production database is a connection-string change, nothing more.
+  #
+  # Two roles are created by mock-data/init/00_roles.sql:
+  #   bi_readonly  -- SELECT only, what the application uses
+  #   ops_owner    -- owns the schema, used only by the seeder
+  # ---------------------------------------------------------------------------
+  mock-ops-db:
+    image: postgres:16-alpine
+    container_name: bi_mock_ops_db
+    environment:
+      POSTGRES_USER: ops_owner
+      POSTGRES_PASSWORD: ops_owner_dev_password
+      POSTGRES_DB: decoinks_mock
+    ports:
+      - "127.0.0.1:5434:5432"
+    volumes:
+      - mock_ops_data:/var/lib/postgresql/data
+      - ./mock-data/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ops_owner -d decoinks_mock"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: bi_redis
+    ports:
+      - "127.0.0.1:6379:6379"
+    command: redis-server --save 60 1 --loglevel warning
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  metadata_data:
+  mock_ops_data:

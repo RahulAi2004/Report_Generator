@@ -1,0 +1,15 @@
+*.pyc
+__pycache__/
+.venv/
+node_modules/
+.next/
+.git/
+data/
+mock-data/*.db
+*.log
+.env
+.env.*
+!.env.example
+!.env.production.example
+deploy/certs/*.pem
+backups/

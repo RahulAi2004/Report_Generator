@@ -1,0 +1,85 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html,
+  body {
+    @apply h-full;
+  }
+  body {
+    @apply bg-canvas text-base text-ink antialiased;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-feature-settings: 'tnum' 1;
+  }
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply rounded bg-line-strong;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  /* Numeric columns must line up; without tabular figures totals look ragged. */
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@layer components {
+  .panel {
+    @apply rounded-lg border border-line bg-white shadow-panel;
+  }
+  .panel-header {
+    @apply flex items-center justify-between border-b border-line px-4 py-2.5;
+  }
+  .panel-title {
+    @apply text-xs font-semibold uppercase tracking-wide text-ink-muted;
+  }
+
+  .btn {
+    @apply inline-flex items-center justify-center gap-1.5 rounded border px-3 py-1.5
+           text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-default {
+    @apply border-line bg-white text-ink hover:bg-canvas;
+  }
+  .btn-primary {
+    @apply border-accent bg-accent text-white hover:bg-accent-hover hover:border-accent-hover;
+  }
+  .btn-ghost {
+    @apply border-transparent bg-transparent text-ink-muted hover:bg-canvas hover:text-ink;
+  }
+  .btn-sm {
+    @apply px-2 py-1 text-xs;
+  }
+
+  .field {
+    @apply w-full rounded border border-line bg-white px-2.5 py-1.5 text-sm text-ink
+           outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/15
+           disabled:bg-canvas disabled:text-ink-faint;
+  }
+  select.field {
+    @apply cursor-pointer appearance-none bg-no-repeat pr-7;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%235A6B7F' stroke-width='2.5'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+    background-position: right 8px center;
+  }
+
+  .label {
+    @apply mb-1 block text-xs font-medium text-ink-muted;
+  }
+
+  .chip {
+    @apply inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-2xs font-medium;
+  }
+
+  .row-hover {
+    @apply transition-colors hover:bg-accent-soft/60;
+  }
+
+  .skeleton {
+    @apply animate-pulse rounded bg-line/70;
+  }
+}

@@ -1,0 +1,56 @@
+# ---------------------------------------------------------------------------
+# SECRETS -- never commit. Deny every .env variant, then allow only the
+# templates back in. A new .env.<something> is therefore ignored by default
+# rather than needing to be remembered.
+# ---------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+!.env.production.example
+
+*.pem
+*.key
+*.p12
+*.pfx
+credentials.json
+secrets.json
+probe_report.json
+deploy/certs/*
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# Node
+node_modules/
+.next/
+out/
+dist/
+build/
+*.tsbuildinfo
+.turbo/
+
+# Local databases and generated data
+data/
+*.db
+*.sqlite
+*.sqlite3
+mock-data/anomaly_manifest.json
+backups/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Runtime artifacts
+*.log
+exports/
+tmp/
