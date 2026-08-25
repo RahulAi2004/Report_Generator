@@ -7,6 +7,68 @@ This procedure has been rehearsed end to end against a real PostgreSQL instance 
 
 ---
 
+## Deploying on your own server
+
+Assumes a Linux server with Docker and Docker Compose already installed.
+
+```bash
+# On the server
+git clone https://github.com/RahulAi2004/Report_Generator.git
+cd Report_Generator
+
+cp .env.production.example .env.production
+chmod 600 .env.production
+nano .env.production        # fill in the values -- see section 2 below
+```
+
+Generate the three secrets it asks for:
+
+```bash
+openssl rand -base64 48     # APP_SECRET
+openssl rand -base64 32     # APP_DB_PASSWORD
+openssl rand -base64 32     # REDIS_PASSWORD
+```
+
+Then follow sections 1 to 6. In short:
+
+```bash
+docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
+docker compose -f docker-compose.prod.yml --env-file .env.production logs -f api
+```
+
+Startup must print `Read-only self-test passed: the connection cannot write.`
+If it does not, the stack refuses to serve and the log says why. That is
+working as designed -- fix the cause rather than disabling the check.
+
+### If the operational database runs on the same server
+
+Inside a container `localhost` means the container, not the host. Use:
+
+```
+DATABASE_HOST=host.docker.internal
+```
+
+`extra_hosts: ["host.docker.internal:host-gateway"]` is already set on the api
+service, so this resolves to the host without further changes.
+
+### Choosing a port
+
+`HTTP_PORT` in `.env.production` sets the published port. If port 80 is already
+taken by another application on the server, set something free (`HTTP_PORT=8090`)
+and put your existing reverse proxy in front of it.
+
+### Updating later
+
+```bash
+git pull
+docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
+```
+
+Named volumes hold the metadata database, so saved reports, users and audit
+history survive a rebuild.
+
+---
+
 ## Before you start
 
 Have these ready. The first three are blockers.
