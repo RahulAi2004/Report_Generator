@@ -12,7 +12,15 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-COMPOSE="docker compose -f docker-compose.prod.yml --env-file .env.production"
+# The server override is applied automatically when OPERATIONAL_DB_NETWORK is
+# set, which is what a database running as another container on this host
+# requires. Leaving it out produced a stack that built and started cleanly and
+# then could not reach the database at all.
+COMPOSE_FILES="-f docker-compose.prod.yml"
+if [ -f .env.production ] && grep -qE '^OPERATIONAL_DB_NETWORK=.+' .env.production; then
+  COMPOSE_FILES="$COMPOSE_FILES -f docker-compose.server.yml"
+fi
+COMPOSE="docker compose $COMPOSE_FILES --env-file .env.production"
 RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[0;33m'; NC=$'\033[0m'
 
 die()  { echo "${RED}✗ $*${NC}" >&2; exit 1; }
@@ -46,6 +54,19 @@ preflight() {
 
   perms=$(stat -c "%a" .env.production 2>/dev/null || echo "600")
   [ "$perms" = "600" ] || warn ".env.production is mode $perms; 600 is safer (chmod 600 .env.production)"
+
+  if [ -n "${OPERATIONAL_DB_NETWORK:-}" ]; then
+    # A database container published only on 127.0.0.1 is unreachable from
+    # inside another container through the host gateway; joining its network is.
+    docker network inspect "$OPERATIONAL_DB_NETWORK" >/dev/null 2>&1       || die "OPERATIONAL_DB_NETWORK=$OPERATIONAL_DB_NETWORK does not exist. List them: docker network ls"
+    ok "will join existing network $OPERATIONAL_DB_NETWORK"
+  fi
+
+  case "${PUBLIC_ORIGIN:-}" in
+    https://*) ;;
+    "") warn "PUBLIC_ORIGIN is unset. Session cookies cannot be marked Secure." ;;
+    *)  warn "PUBLIC_ORIGIN is http://. Sign-in works, but credentials cross the network in the clear." ;;
+  esac
 
   ok "pre-flight checks passed"
 }

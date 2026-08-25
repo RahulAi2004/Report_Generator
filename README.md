@@ -153,17 +153,22 @@ Beyond the suite, the engine has been swept with:
 ## Layout
 
 ```
-apps/api/          FastAPI backend
-  app/domain/      report engine, safety layer, schema registry  <- the core
-  app/adapters/    PostgreSQL (production) and SQLite (demo)
-  app/api/v1/      routes
-  tests/
-apps/web/          Next.js frontend
-  app/(app)/       authenticated shell and pages
-  components/      builder panels, shell, primitives
-  store/           report IR state
-mock-data/         DEV ONLY: seeder + planted-anomaly manifest
-scripts/           read-only production database probe
+apps/api/                    FastAPI backend
+  app/domain/                report engine, safety layer, schema registry  <- the core
+  app/adapters/              PostgreSQL (production) and SQLite (demo)
+  app/api/v1/                routes
+  tests/                     unit, integration, PostgreSQL dialect
+apps/web/                    Next.js frontend
+  app/(app)/                 authenticated shell and pages
+  components/builder/        the report builder panels
+  store/                     report IR state
+mock-data/                   DEV ONLY: schema seeder + planted-anomaly manifest
+scripts/                     read-only DB probe, first-admin bootstrap
+deploy/                      nginx config, TLS helper
+docker-compose.yml           local development stack
+docker-compose.prod.yml      production stack
+docker-compose.server.yml    override: operational DB on the same Docker host
+deploy.sh                    pre-flight checks, build, start, verify
 ```
 
 ---

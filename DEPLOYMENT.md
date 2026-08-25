@@ -32,8 +32,8 @@ openssl rand -base64 32     # REDIS_PASSWORD
 Then follow sections 1 to 6. In short:
 
 ```bash
-docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
-docker compose -f docker-compose.prod.yml --env-file .env.production logs -f api
+docker compose -f docker-compose.prod.yml -f docker-compose.server.yml --env-file .env.production up -d --build
+docker compose -f docker-compose.prod.yml -f docker-compose.server.yml --env-file .env.production logs -f api
 ```
 
 Startup must print `Read-only self-test passed: the connection cannot write.`
@@ -42,14 +42,54 @@ working as designed -- fix the cause rather than disabling the check.
 
 ### If the operational database runs on the same server
 
-Inside a container `localhost` means the container, not the host. Use:
+A container published only on `127.0.0.1` cannot be reached from inside another
+container -- the Docker host gateway is not the host's loopback interface. Attach
+this stack's backend to the network the database already sits on instead:
+
+```bash
+# Find the network and the container's own port
+docker inspect <db-container>   --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}'
+```
+
+Then in `.env.production`:
 
 ```
-DATABASE_HOST=host.docker.internal
+DATABASE_HOST=<db container name>
+DATABASE_PORT=5432                    # the container's port, not the published one
+OPERATIONAL_DB_NETWORK=<that network>
 ```
 
-`extra_hosts: ["host.docker.internal:host-gateway"]` is already set on the api
-service, so this resolves to the host without further changes.
+`deploy.sh` picks up `docker-compose.server.yml` automatically once
+`OPERATIONAL_DB_NETWORK` is set. Doing it by hand means passing both files:
+
+```bash
+docker compose -f docker-compose.prod.yml -f docker-compose.server.yml   --env-file .env.production up -d --build
+```
+
+This *joins* an existing network. It does not create, modify or reconfigure one,
+and nothing about the database container or its other clients changes.
+
+### Choosing which schema to expose
+
+Databases often keep curated reporting views in their own schema alongside the
+raw application tables. Exposing the raw schema offers business users
+migrations, refresh tokens and webhook logs; exposing the reporting schema
+offers them their actual data.
+
+```sql
+SELECT table_schema, count(*) FROM information_schema.tables
+WHERE table_schema NOT IN ('pg_catalog','information_schema')
+GROUP BY table_schema ORDER BY 2 DESC;
+```
+
+Set `DATABASE_SCHEMA` to the one you want, and grant the read-only role access
+to it:
+
+```sql
+GRANT USAGE ON SCHEMA <schema> TO bi_readonly;
+GRANT SELECT ON ALL TABLES IN SCHEMA <schema> TO bi_readonly;
+ALTER DEFAULT PRIVILEGES IN SCHEMA <schema> GRANT SELECT ON TABLES TO bi_readonly;
+```
 
 ### Choosing a port
 
@@ -61,7 +101,7 @@ and put your existing reverse proxy in front of it.
 
 ```bash
 git pull
-docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
+docker compose -f docker-compose.prod.yml -f docker-compose.server.yml --env-file .env.production up -d --build
 ```
 
 Named volumes hold the metadata database, so saved reports, users and audit
@@ -159,14 +199,14 @@ Then in `deploy/nginx.conf`, uncomment the HTTPS server block and change the por
 ## 4. Deploy
 
 ```bash
-docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
-docker compose -f docker-compose.prod.yml --env-file .env.production ps
+docker compose -f docker-compose.prod.yml -f docker-compose.server.yml --env-file .env.production up -d --build
+docker compose -f docker-compose.prod.yml -f docker-compose.server.yml --env-file .env.production ps
 ```
 
 All five services should reach `healthy`. Then confirm the guarantee that matters:
 
 ```bash
-docker compose -f docker-compose.prod.yml --env-file .env.production logs api | grep "self-test"
+docker compose -f docker-compose.prod.yml -f docker-compose.server.yml --env-file .env.production logs api | grep "self-test"
 # expected: Read-only self-test passed: the connection cannot write.
 ```
 
@@ -179,7 +219,7 @@ docker compose -f docker-compose.prod.yml --env-file .env.production logs api | 
 Production seeds no accounts, so a fresh install has no way in until you do this.
 
 ```bash
-docker compose -f docker-compose.prod.yml --env-file .env.production exec api \
+docker compose -f docker-compose.prod.yml -f docker-compose.server.yml --env-file .env.production exec api \
   python scripts/bootstrap_admin.py --email you@yourcompany.com --generate-password
 ```
 
@@ -200,19 +240,19 @@ The password is printed **once**. Store it in your password manager. Then sign i
 
 ```bash
 # Logs
-docker compose -f docker-compose.prod.yml --env-file .env.production logs -f api
+docker compose -f docker-compose.prod.yml -f docker-compose.server.yml --env-file .env.production logs -f api
 
 # Update to a new version
 git pull
-docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
+docker compose -f docker-compose.prod.yml -f docker-compose.server.yml --env-file .env.production up -d --build
 
 # Back up application data (saved reports, users, audit trail)
-docker compose -f docker-compose.prod.yml --env-file .env.production exec metadata-db \
+docker compose -f docker-compose.prod.yml -f docker-compose.server.yml --env-file .env.production exec metadata-db \
   pg_dump -U bi_app bi_metadata | gzip > backups/bi_metadata_$(date +%F).sql.gz
 
 # Restore
 gunzip -c backups/bi_metadata_2026-08-23.sql.gz | \
-  docker compose -f docker-compose.prod.yml --env-file .env.production exec -T metadata-db \
+  docker compose -f docker-compose.prod.yml -f docker-compose.server.yml --env-file .env.production exec -T metadata-db \
   psql -U bi_app bi_metadata
 ```
 
