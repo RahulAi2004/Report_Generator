@@ -313,24 +313,65 @@ class DatabaseAdapter(ABC):
 # assignment in the metadata database; this only supplies the first guess.
 # ---------------------------------------------------------------------------
 DEFAULT_CATEGORY_RULES: list[tuple[str, tuple[str, ...]]] = [
-    # Checked in order, so the more specific patterns come first: without this
-    # `order_status_history` would land in Sales rather than System.
-    ("System", ("history", "audit", "activity_log", "setting", "config")),
-    ("Customers", ("customer", "contact", "lead", "client")),
-    ("Purchasing", ("purchase", "supplier", "vendor", "procurement")),
-    ("Sales", ("sales_order", "salesorder", "quotation", "quote", "invoice", "order")),
-    ("Artwork", ("artwork", "gang_sheet", "gangsheet", "design", "art")),
-    ("Payments", ("payment", "transaction", "receipt", "refund")),
-    ("Fulfillment", ("shipment", "shipping", "tracking", "delivery", "fulfil")),
-    ("Production", ("production", "print", "batch", "job")),
-    ("People", ("user", "employee", "staff", "role", "permission")),
-    ("System", ("history", "log", "audit", "activity", "setting", "config")),
+    # Checked in order, so more specific patterns come first.
+    ("System", ("history", "audit", "activity", "activity_log", "setting", "config",
+                "migration", "webhook", "event", "counter", "meta_kv", "log")),
+    ("Purchasing", ("purchase", "purchase_order", "po", "supplier", "vendor",
+                    "procurement")),
+    ("Customers", ("customer", "contact", "lead", "client", "party", "parties",
+                   "portal_user")),
+    ("Sales", ("sales_order", "salesorder", "order", "quotation", "quote",
+               "invoice", "product")),
+    ("Artwork", ("artwork", "artworks", "gangsheet", "gang_sheet", "design",
+                 "mockup")),
+    ("Payments", ("payment", "receipt", "refund", "allocation", "transaction")),
+    ("Fulfillment", ("shipment", "shipping", "tracking", "delivery", "fulfilment",
+                     "fulfillment")),
+    ("Production", ("production", "print", "batch", "job", "task")),
+    ("Communication", ("message", "conversation", "chat", "chatwoot", "note",
+                       "notification", "email")),
+    ("Files", ("file", "attachment", "asset", "upload", "document")),
+    ("People", ("user", "users", "employee", "staff", "role", "permission",
+                "token", "session")),
 ]
 
 
+def _tokens(table_name: str) -> set[str]:
+    """
+    Split a table name into words, plus their singular forms.
+
+    Matching on tokens rather than substrings matters: the naive check found
+    "art" inside "p-art-y" and filed every `party*` table under Artwork.
+    """
+    parts = [p for p in table_name.lower().replace("-", "_").split("_") if p]
+    tokens = set(parts)
+    for part in parts:
+        if part.endswith("ies") and len(part) > 4:
+            tokens.add(part[:-3] + "y")
+        elif part.endswith("es") and len(part) > 3:
+            tokens.add(part[:-2])
+        if part.endswith("s") and len(part) > 2:
+            tokens.add(part[:-1])
+    # The full name too, so multi-word keywords like "gang_sheet" still match.
+    tokens.add(table_name.lower())
+    return tokens
+
+
 def categorize(table_name: str, rules: list[tuple[str, tuple[str, ...]]] | None = None) -> str:
+    """
+    Suggest a business category for a discovered table.
+
+    Only a first guess -- an administrator can override any assignment in the
+    metadata database without touching the production schema (spec 36).
+    """
+    tokens = _tokens(table_name)
     lowered = table_name.lower()
+
     for category, keywords in rules or DEFAULT_CATEGORY_RULES:
-        if any(keyword in lowered for keyword in keywords):
-            return category
+        for keyword in keywords:
+            if keyword in tokens:
+                return category
+            # Multi-word keywords are matched against the whole name.
+            if "_" in keyword and keyword in lowered:
+                return category
     return "Other"

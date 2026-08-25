@@ -16,6 +16,8 @@ from app.core.deps import current_principal, require, write_audit
 from app.core.security import Permission, Principal
 from app.domain.report.resolver import legal_operators
 from app.domain.schema.registry import Aggregation, TableMeta
+from app.adapters.factory import get_adapter
+from app.core.config import settings
 from app.services import schema_service
 
 router = APIRouter(prefix="/schema", tags=["schema"])
@@ -160,7 +162,18 @@ def overview(
     """Headline numbers for the Data Sources landing page."""
     registry = schema_service.build_registry(db, principal)
     tables = registry.tables
+    adapter = get_adapter()
     return {
+        # Which database these tables actually came from. Shown to signed-in
+        # users so nobody builds a report against the wrong source. The host and
+        # credentials are deliberately not included.
+        "connection": {
+            "database": settings.database_name,
+            "dialect": adapter.dialect,
+            "mode": settings.data_source_mode,
+            "read_only_enforced": settings.database_enforce_read_only,
+            "is_replica": settings.database_is_replica,
+        },
         "table_count": len(tables),
         "column_count": sum(len(table.columns) for table in tables),
         "relationship_count": len(registry.relationships),
