@@ -3,6 +3,7 @@
 import clsx from 'clsx';
 
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ColumnGrid } from '@/components/builder/ColumnGrid';
 import { ColumnInspector } from '@/components/builder/ColumnInspector';
@@ -38,6 +39,7 @@ export default function BuilderPage() {
   const { definition, selectedTable, selectedColumnId, reportName } = builder;
 
   const [validation, setValidation] = useState<ValidationResult | null>(null);
+  const router = useRouter();
   const queryClient = useQueryClient();
   const [preview, setPreview] = useState<PreviewResult | null>(null);
   const [totalRows, setTotalRows] = useState<number | null>(null);
@@ -254,7 +256,12 @@ export default function BuilderPage() {
         <div className="flex shrink-0 items-center gap-1.5">
           <Button
             size="sm"
-            onClick={() => saveMutation.mutate()}
+            onClick={() => {
+              // A report that already exists saves in place; a new one goes to
+              // the Save Report screen, where it is filed and its visibility set.
+              if (builder.reportId) saveMutation.mutate();
+              else router.push('/reports/save');
+            }}
             disabled={!can('save_report') || saveMutation.isPending || !reportName.trim()}
             title={can('save_report') ? undefined : 'Your role cannot save reports'}
           >
@@ -264,8 +271,7 @@ export default function BuilderPage() {
             size="sm"
             onClick={() => {
               builder.loadReport(null, `${reportName} (copy)`, definition);
-              setToast('Now editing a copy — press Save to store it');
-              setTimeout(() => setToast(null), 2600);
+              router.push('/reports/save');
             }}
             disabled={!can('save_report')}
           >

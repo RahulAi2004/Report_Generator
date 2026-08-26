@@ -201,6 +201,18 @@ export const api = {
     request<{ id: string; name: string; definition: ReportDefinition }>(`/reports/${id}`),
   createReport: (name: string, definition: ReportDefinition, description?: string) =>
     post<{ id: string; name: string }>('/reports', { name, definition, description }),
+  reportModules: () =>
+    request<{ modules: { name: string; sections: string[] }[] }>('/reports/modules'),
+
+  /** Save with placement, access and behaviour, as the Save Report screen collects. */
+  createReportFull: (definition: ReportDefinition, options: SaveOptions) =>
+    post<{ id: string; name: string }>('/reports', { ...options, definition }),
+  updateReportFull: (id: string, definition: ReportDefinition, options: SaveOptions) =>
+    request<{ id: string; name: string }>(`/reports/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify({ ...options, definition }),
+    }),
+
   deleteReport: (id: string) =>
     request<{ ok: boolean }>(`/reports/${id}`, { method: 'DELETE' }),
   updateReport: (id: string, name: string, definition: ReportDefinition) =>
@@ -214,6 +226,10 @@ export interface SavedReportSummary {
   id: string;
   name: string;
   description: string | null;
+  module?: string | null;
+  section?: string | null;
+  visibility?: 'private' | 'team' | 'organization';
+  is_draft?: boolean;
   folder: string | null;
   is_template: boolean;
   is_favorite: boolean;
@@ -259,4 +275,19 @@ export interface UploadedDataset {
   columns: { name: string; label: string; data_type: string; nullable: boolean }[];
   size_bytes: number;
   created_at: string;
+}
+
+
+export interface SaveOptions {
+  name: string;
+  description?: string;
+  module?: string;
+  section?: string;
+  visibility: 'private' | 'team' | 'organization';
+  allow_duplicate: boolean;
+  show_in_menu: boolean;
+  save_filters_and_sorting: boolean;
+  pin_to_dashboard: boolean;
+  auto_refresh: boolean;
+  is_draft: boolean;
 }

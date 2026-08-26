@@ -13,7 +13,7 @@ import re
 import time
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal
 
 import sqlalchemy as sa
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -46,10 +46,25 @@ class PreviewRequest(BaseModel):
 
 class SaveRequest(BaseModel):
     name: str = Field(min_length=1, max_length=190)
-    description: str | None = None
+    description: str | None = Field(default=None, max_length=2000)
     definition: ReportDefinition
     folder: str | None = None
     is_template: bool = False
+
+    # Where it appears
+    module: str | None = Field(default=None, max_length=80)
+    section: str | None = Field(default=None, max_length=80)
+
+    # Who can see it
+    visibility: Literal["private", "team", "organization"] = "private"
+    allow_duplicate: bool = True
+    show_in_menu: bool = True
+
+    # How it behaves
+    save_filters_and_sorting: bool = True
+    pin_to_dashboard: bool = False
+    auto_refresh: bool = True
+    is_draft: bool = False
 
 
 def _engine(
@@ -392,14 +407,72 @@ def _number_format(column) -> str | None:
 # ---------------------------------------------------------------------------
 # Saved reports (spec 16)
 # ---------------------------------------------------------------------------
+#: Default placement taxonomy. Stored in app settings once an administrator
+#: edits it, so this is only the starting point rather than a fixed list.
+DEFAULT_MODULES: list[dict] = [
+    {"name": "CRM", "sections": ["Customers", "Leads", "Contacts", "Activity"]},
+    {"name": "Sales", "sections": ["Orders", "Quotations", "Invoices", "Products"]},
+    {"name": "Finance", "sections": ["Payments", "Receivables", "Reconciliation"]},
+    {"name": "Purchasing", "sections": ["Purchase Orders", "Suppliers"]},
+    {"name": "Fulfillment", "sections": ["Shipments", "Production", "Artwork"]},
+]
+MODULES_SETTING = "report_modules"
+
+
+@router.get("/modules")
+def list_modules(
+    db: DbSession = Depends(get_session),
+    principal: Principal = Depends(current_principal),
+):
+    """
+    Where a saved report can be filed.
+
+    Modules that reports already use are merged in, so a taxonomy edited
+    directly in the database never orphans an existing report.
+    """
+    from app.models.metadata_models import AppSetting
+
+    configured = db.get(AppSetting, MODULES_SETTING)
+    modules = list(configured.value) if configured and configured.value else list(DEFAULT_MODULES)
+
+    known = {module["name"]: set(module["sections"]) for module in modules}
+    rows = db.execute(
+        sa.select(Report.module, Report.section)
+        .where(Report.module.isnot(None), Report.is_archived == False)  # noqa: E712
+        .distinct()
+    )
+    for module, section in rows:
+        known.setdefault(module, set())
+        if section:
+            known[module].add(section)
+
+    order = [module["name"] for module in modules]
+    return {
+        "modules": [
+            {"name": name, "sections": sorted(known[name])}
+            for name in sorted(known, key=lambda n: (order.index(n) if n in order else 99, n))
+        ]
+    }
+
+
 @router.get("")
 def list_reports(
     db: DbSession = Depends(get_session),
     principal: Principal = Depends(current_principal),
 ):
+    # "Private" has to mean private, not merely be labelled so. A private report
+    # or an unfinished draft is visible to its owner and to an administrator.
+    visible = sa.or_(
+        Report.visibility.in_(("team", "organization")),
+        Report.owner_id == principal.id,
+    )
+    if principal.is_admin:
+        visible = sa.true()
+
     rows = db.scalars(
         sa.select(Report)
-        .where(Report.is_archived == False)  # noqa: E712
+        .where(Report.is_archived == False, visible)  # noqa: E712
+        .where(sa.or_(Report.is_draft == False, Report.owner_id == principal.id))  # noqa: E712
         .order_by(Report.updated_at.desc())
     ).all()
     return {
@@ -412,6 +485,10 @@ def list_reports(
                 "is_template": report.is_template,
                 "is_favorite": report.is_favorite,
                 "owner_id": report.owner_id,
+                "module": report.module,
+                "section": report.section,
+                "visibility": report.visibility,
+                "is_draft": report.is_draft,
                 "updated_at": report.updated_at.isoformat(),
                 "last_run_at": report.last_run_at.isoformat() if report.last_run_at else None,
                 "run_count": report.run_count,
@@ -440,6 +517,15 @@ def get_report(
         "is_favorite": report.is_favorite,
         "definition": report.definition,
         "updated_at": report.updated_at.isoformat(),
+        "module": report.module,
+        "section": report.section,
+        "visibility": report.visibility,
+        "allow_duplicate": report.allow_duplicate,
+        "show_in_menu": report.show_in_menu,
+        "save_filters_and_sorting": report.save_filters_and_sorting,
+        "pin_to_dashboard": report.pin_to_dashboard,
+        "auto_refresh": report.auto_refresh,
+        "is_draft": report.is_draft,
     }
 
 
@@ -455,8 +541,9 @@ def create_report(
         description=payload.description,
         folder=payload.folder,
         is_template=payload.is_template,
-        definition=payload.definition.model_dump(mode="json"),
+        definition=_definition_for_save(payload),
         owner_id=principal.id,
+        **_placement(payload),
     )
     db.add(report)
     db.commit()
@@ -482,7 +569,9 @@ def update_report(
     report.name = payload.name
     report.description = payload.description
     report.folder = payload.folder
-    report.definition = payload.definition.model_dump(mode="json")
+    report.definition = _definition_for_save(payload)
+    for field, value in _placement(payload).items():
+        setattr(report, field, value)
     db.commit()
     write_audit(db, principal, "report_modified", resource_type="report",
                 resource_id=report.id, ip=client_ip(request))
@@ -509,6 +598,39 @@ def archive_report(
 
 
 # ---------------------------------------------------------------------------
+def _placement(payload: SaveRequest) -> dict:
+    """The where/who/how fields, kept together so create and update agree."""
+    return {
+        "module": payload.module,
+        "section": payload.section,
+        "visibility": payload.visibility,
+        "allow_duplicate": payload.allow_duplicate,
+        "show_in_menu": payload.show_in_menu,
+        "save_filters_and_sorting": payload.save_filters_and_sorting,
+        "pin_to_dashboard": payload.pin_to_dashboard,
+        "auto_refresh": payload.auto_refresh,
+        "is_draft": payload.is_draft,
+    }
+
+
+def _definition_for_save(payload: SaveRequest) -> dict:
+    """
+    Strip filters and sorting when the author asked not to keep them.
+
+    Otherwise everyone who opens the report inherits whatever the author
+    happened to be looking at when they saved it.
+    """
+    definition = payload.definition
+    if not payload.save_filters_and_sorting:
+        definition = definition.model_copy(
+            update={
+                "filters": type(definition.filters)(),
+                "sort_by": [],
+            }
+        )
+    return definition.model_dump(mode="json")
+
+
 def _record_history(
     db: DbSession,
     principal: Principal,

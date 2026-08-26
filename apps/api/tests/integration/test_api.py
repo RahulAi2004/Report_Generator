@@ -680,3 +680,96 @@ def test_deleting_a_report_removes_it_from_the_list(client, admin):
 
     names = [r["name"] for r in client.get("/api/v1/reports", headers=admin).json()["reports"]]
     assert "Temporary" not in names
+
+
+# ---------------------------------------------------------------------------
+# Save Report: placement, visibility and save options
+# ---------------------------------------------------------------------------
+def test_modules_and_sections_are_offered(client, admin):
+    body = client.get("/api/v1/reports/modules", headers=admin).json()
+    names = [m["name"] for m in body["modules"]]
+    assert "CRM" in names and "Sales" in names
+    crm = next(m for m in body["modules"] if m["name"] == "CRM")
+    assert "Customers" in crm["sections"]
+
+
+def test_report_is_saved_with_its_placement(client, admin):
+    created = client.post("/api/v1/reports", headers=admin, json={
+        "name": "Placed Report", "definition": SIMPLE_REPORT,
+        "module": "CRM", "section": "Customers",
+        "visibility": "team", "pin_to_dashboard": True, "auto_refresh": False,
+    }).json()
+
+    loaded = client.get(f"/api/v1/reports/{created['id']}", headers=admin).json()
+    assert loaded["module"] == "CRM"
+    assert loaded["section"] == "Customers"
+    assert loaded["visibility"] == "team"
+    assert loaded["pin_to_dashboard"] is True
+    assert loaded["auto_refresh"] is False
+
+    client.delete(f"/api/v1/reports/{created['id']}", headers=admin)
+
+
+def test_private_reports_are_not_listed_to_other_people(client, admin):
+    """A visibility setting that is only a label is worse than none."""
+    private = client.post("/api/v1/reports", headers=admin, json={
+        "name": "Admin Private Report", "definition": SIMPLE_REPORT,
+        "visibility": "private",
+    }).json()
+    shared = client.post("/api/v1/reports", headers=admin, json={
+        "name": "Shared Report", "definition": SIMPLE_REPORT,
+        "visibility": "team",
+    }).json()
+
+    try:
+        analyst = auth(client, ANALYST)
+        names = [r["name"] for r in client.get("/api/v1/reports", headers=analyst).json()["reports"]]
+        assert "Shared Report" in names
+        assert "Admin Private Report" not in names
+
+        # The owner still sees their own.
+        mine = [r["name"] for r in client.get("/api/v1/reports", headers=admin).json()["reports"]]
+        assert "Admin Private Report" in mine
+    finally:
+        client.delete(f"/api/v1/reports/{private['id']}", headers=admin)
+        client.delete(f"/api/v1/reports/{shared['id']}", headers=admin)
+
+
+def test_drafts_are_only_visible_to_their_author(client, admin):
+    draft = client.post("/api/v1/reports", headers=admin, json={
+        "name": "Unfinished Draft", "definition": SIMPLE_REPORT,
+        "visibility": "organization", "is_draft": True,
+    }).json()
+    try:
+        analyst = auth(client, ANALYST)
+        names = [r["name"] for r in client.get("/api/v1/reports", headers=analyst).json()["reports"]]
+        assert "Unfinished Draft" not in names
+    finally:
+        client.delete(f"/api/v1/reports/{draft['id']}", headers=admin)
+
+
+def test_filters_are_dropped_when_the_author_asks(client, admin):
+    """
+    Otherwise everyone who opens the report inherits whatever the author
+    happened to be looking at when they saved it.
+    """
+    definition = {
+        **SIMPLE_REPORT,
+        "filters": {"kind": "group", "op": "and", "children": [
+            {"kind": "condition", "table": "customers", "field": "city",
+             "operator": "equals", "values": ["Madrid"]},
+        ]},
+        "sort_by": [{"column_id": "c1", "direction": "desc"}],
+    }
+    created = client.post("/api/v1/reports", headers=admin, json={
+        "name": "Neutral Report", "definition": definition,
+        "save_filters_and_sorting": False,
+    }).json()
+
+    loaded = client.get(f"/api/v1/reports/{created['id']}", headers=admin).json()
+    assert loaded["definition"]["filters"]["children"] == []
+    assert loaded["definition"]["sort_by"] == []
+    # The columns are untouched.
+    assert len(loaded["definition"]["columns"]) == len(SIMPLE_REPORT["columns"])
+
+    client.delete(f"/api/v1/reports/{created['id']}", headers=admin)

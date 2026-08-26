@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from contextlib import contextmanager
 from typing import Iterator
 
@@ -19,6 +20,8 @@ _engine = sa.create_engine(
     if settings.metadata_dsn.startswith("sqlite")
     else {},
 )
+
+logger = logging.getLogger(__name__)
 
 SessionLocal = sessionmaker(bind=_engine, autoflush=False, expire_on_commit=False)
 
@@ -47,6 +50,55 @@ def get_session() -> Iterator[Session]:
         yield session
     finally:
         session.close()
+
+
+def _add_missing_columns() -> None:
+    """
+    Add columns that models declare but existing tables lack.
+
+    create_all() only creates tables that are absent; it never alters one that
+    exists. Without this, adding a field to a model would leave a deployed
+    installation failing on every query that mentions it -- and the failure
+    would appear long after the deploy that caused it.
+
+    Deliberately limited to adding nullable columns with defaults: anything
+    that could lose data belongs in a reviewed migration, not here.
+    """
+    inspector = sa.inspect(_engine)
+    for table in Base.metadata.sorted_tables:
+        if not inspector.has_table(table.name):
+            continue
+        existing = {column["name"] for column in inspector.get_columns(table.name)}
+        for column in table.columns:
+            if column.name in existing or column.primary_key:
+                continue
+            if not column.nullable and column.default is None:
+                logger.warning(
+                    "Column %s.%s is missing and cannot be added automatically "
+                    "because it is NOT NULL without a default.",
+                    table.name, column.name,
+                )
+                continue
+
+            ddl_type = column.type.compile(dialect=_engine.dialect)
+            statement = f'ALTER TABLE "{table.name}" ADD COLUMN "{column.name}" {ddl_type}'
+            default = getattr(column.default, "arg", None)
+            if default is not None and not callable(default):
+                literal = (
+                    "TRUE" if default is True
+                    else "FALSE" if default is False
+                    else f"'{default}'" if isinstance(default, str)
+                    else str(default)
+                )
+                statement += f" DEFAULT {literal}"
+            try:
+                with _engine.begin() as connection:
+                    connection.execute(sa.text(statement))
+                logger.info("Added missing column %s.%s", table.name, column.name)
+            except Exception:
+                logger.warning(
+                    "Could not add column %s.%s", table.name, column.name, exc_info=True
+                )
 
 
 #: Development seed accounts. Every role is represented so permission behaviour
@@ -87,6 +139,8 @@ def init_database(seed_dev_users: bool = True) -> None:
                 sa.text("SELECT pg_advisory_xact_lock(:key)"), {"key": _SCHEMA_LOCK_KEY}
             )
             Base.metadata.create_all(connection)
+
+    _add_missing_columns()
 
     if not seed_dev_users or settings.environment == "production":
         return

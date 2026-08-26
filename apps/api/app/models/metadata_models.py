@@ -177,6 +177,26 @@ class Report(Base):
     is_favorite: Mapped[bool] = mapped_column(sa.Boolean, default=False)
     is_archived: Mapped[bool] = mapped_column(sa.Boolean, default=False)
     folder: Mapped[str | None] = mapped_column(sa.String(120), nullable=True)
+
+    # -- Where it appears -------------------------------------------------
+    module: Mapped[str | None] = mapped_column(sa.String(80), nullable=True, index=True)
+    section: Mapped[str | None] = mapped_column(sa.String(80), nullable=True)
+
+    # -- Who can see it ---------------------------------------------------
+    #: private | team | organization. Enforced when listing, so "private"
+    #: means private rather than merely labelled so.
+    visibility: Mapped[str] = mapped_column(sa.String(20), default="private")
+    allow_duplicate: Mapped[bool] = mapped_column(sa.Boolean, default=True)
+    show_in_menu: Mapped[bool] = mapped_column(sa.Boolean, default=True)
+
+    # -- How it behaves ---------------------------------------------------
+    #: When false the filters and sorting are cleared on save, so the report
+    #: opens neutral rather than carrying one person's working state.
+    save_filters_and_sorting: Mapped[bool] = mapped_column(sa.Boolean, default=True)
+    pin_to_dashboard: Mapped[bool] = mapped_column(sa.Boolean, default=False)
+    auto_refresh: Mapped[bool] = mapped_column(sa.Boolean, default=True)
+    #: A draft is saved but not offered to anyone else.
+    is_draft: Mapped[bool] = mapped_column(sa.Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(sa.DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(sa.DateTime, default=utcnow, onupdate=utcnow)
     last_run_at: Mapped[datetime | None] = mapped_column(sa.DateTime, nullable=True)
@@ -250,6 +270,16 @@ class AuditLog(Base):
     #: sha256 of (prev_hash + this row's canonical fields).
     prev_hash: Mapped[str | None] = mapped_column(sa.String(64), nullable=True)
     row_hash: Mapped[str | None] = mapped_column(sa.String(64), nullable=True)
+
+
+class AppSetting(Base):
+    """Key/value application configuration an administrator can edit."""
+
+    __tablename__ = "app_settings"
+
+    key: Mapped[str] = mapped_column(sa.String(80), primary_key=True)
+    value: Mapped[dict | list | None] = mapped_column(sa.JSON, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(sa.DateTime, default=utcnow, onupdate=utcnow)
 
 
 class QueryHistory(Base):
