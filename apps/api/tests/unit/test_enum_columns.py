@@ -169,3 +169,79 @@ def test_join_between_differing_types_is_cast():
     assert result.ok, [d.message for d in result.diagnostics]
     sql = engine.render_sql(result.compiled, with_values=True).upper()
     assert "CAST" in sql, f"join keys of differing types were not cast: {sql}"
+
+
+def test_tables_with_the_same_name_in_different_schemas_stay_distinct():
+    """
+    Exposing several schemas means a name can appear more than once -- messages
+    exists in three. Dropping the duplicates would quietly hide a table someone
+    needs, so the colliding ones are qualified instead.
+    """
+    from app.domain.schema.registry import ColumnMeta, DataType, SchemaRegistry, TableMeta
+
+    def make(schema: str) -> TableMeta:
+        return TableMeta(
+            name="messages",
+            schema=schema,
+            columns=(
+                ColumnMeta(table="messages", name="id", data_type=DataType.UUID,
+                           physical_type="uuid"),
+                ColumnMeta(table="messages", name="body", data_type=DataType.TEXT,
+                           physical_type="text"),
+            ),
+        )
+
+    unique = TableMeta(
+        name="orders",
+        schema="reporting",
+        columns=(ColumnMeta(table="orders", name="id", data_type=DataType.UUID,
+                            physical_type="uuid"),),
+    )
+
+    registry = SchemaRegistry([make("app"), make("public"), unique])
+
+    # Both survive, under distinct names.
+    assert registry.table("app.messages") is not None
+    assert registry.table("public.messages") is not None
+    assert len(registry.tables) == 3
+
+    # Each still points at the real table.
+    assert registry.table("app.messages").real_name == "messages"
+    assert registry.table("app.messages").schema == "app"
+
+    # Columns follow their table's new name, or resolution would break.
+    assert registry.column("app.messages", "body") is not None
+
+    # A name that does not collide is left alone.
+    assert registry.table("orders") is not None
+    assert registry.table("orders").real_name == "orders"
+
+
+def test_a_qualified_table_compiles_to_its_real_name():
+    from app.domain.report.engine import EngineOptions, ReportEngine
+    from app.domain.report.ir import ReportColumn, ReportDefinition
+    from app.domain.schema.registry import ColumnMeta, DataType, SchemaRegistry, TableMeta
+
+    def make(schema: str) -> TableMeta:
+        return TableMeta(
+            name="messages",
+            schema=schema,
+            columns=(ColumnMeta(table="messages", name="body", data_type=DataType.TEXT,
+                                physical_type="text"),),
+        )
+
+    registry = SchemaRegistry([make("app"), make("public")])
+    engine = ReportEngine(registry, EngineOptions())
+
+    definition = ReportDefinition(
+        primary_table="app.messages",
+        tables=["app.messages"],
+        columns=[ReportColumn(id="c1", table="app.messages", field="body")],
+    )
+    result = engine.build(definition)
+    assert result.ok, [d.message for d in result.diagnostics]
+
+    sql = engine.render_sql(result.compiled, with_values=True)
+    # The SQL names the schema and the real table, never the registry key.
+    assert "app.messages" in sql
+    assert '"app.messages"' not in sql

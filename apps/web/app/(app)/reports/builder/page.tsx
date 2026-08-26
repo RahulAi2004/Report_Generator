@@ -515,26 +515,10 @@ export default function BuilderPage() {
         open={joinsOpen}
         onClose={() => setJoinsOpen(false)}
         validation={validation}
+        definition={definition}
         labels={labels}
-        onSetJoinType={(step, joinType) => {
-          // Persist the chosen type as an explicit join. The planner honours
-          // declared joins over the path it would have picked itself.
-          const existing = definition.joins.filter(
-            (join) =>
-              !(join.left_table === step.from_table && join.right_table === step.to_table),
-          );
-          builder.setJoins([
-            ...existing,
-            {
-              left_table: step.from_table,
-              left_column: step.from_column,
-              right_table: step.to_table,
-              right_column: step.to_column,
-              join_type: joinType,
-              relationship_id: step.relationship_id,
-            },
-          ]);
-        }}
+        tables={tables}
+        onSetJoins={builder.setJoins}
       />
 
 

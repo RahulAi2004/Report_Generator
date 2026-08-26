@@ -192,7 +192,7 @@ class ReportCompiler:
         if cached is not None:
             return cached
         table = sa.Table(
-            meta.name,
+            meta.real_name,
             self._metadata,
             *[
                 sa.Column(column.name, _SA_TYPES[column.data_type]())

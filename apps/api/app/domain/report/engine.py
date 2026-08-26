@@ -178,7 +178,10 @@ class ReportEngine:
             GuardPolicy(
                 max_joins=self.options.max_joins + 4,  # sub-selects add their own joins
                 max_subquery_depth=self.options.max_subquery_depth,
-                allowed_tables={t.name.lower() for t in self.registry.tables},
+                # The allowlist is checked against the SQL, which names the
+                # physical table -- not the registry key, which may carry a
+                # schema prefix to keep colliding names apart.
+                allowed_tables={t.real_name.lower() for t in self.registry.tables},
             ),
         )
 

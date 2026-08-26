@@ -138,8 +138,15 @@ class ColumnMeta:
 
 @dataclass(frozen=True, slots=True)
 class TableMeta:
+    #: How this table is addressed everywhere above the adapter: unique across
+    #: the registry. When one name exists in several schemas -- `messages` in
+    #: app, public and technocas, say -- this becomes "schema.name" so a report
+    #: cannot silently refer to the wrong one.
     name: str
     schema: str = "public"
+    #: The real table name in the database. Differs from `name` only when the
+    #: name had to be qualified to stay unique.
+    physical_name: str | None = None
     kind: str = "table"
     display_name: str | None = None
     category: str = "Uncategorized"
@@ -154,8 +161,13 @@ class TableMeta:
     is_sensitive: bool = False
 
     @property
+    def real_name(self) -> str:
+        """The identifier to emit in SQL."""
+        return self.physical_name or self.name
+
+    @property
     def label(self) -> str:
-        return self.display_name or humanize(self.name)
+        return self.display_name or humanize(self.real_name)
 
     @property
     def primary_key(self) -> tuple[ColumnMeta, ...]:
@@ -230,7 +242,9 @@ class SchemaRegistry:
         connection_id: str | None = None,
     ) -> None:
         self.connection_id = connection_id
-        self._tables: dict[str, TableMeta] = {t.name.lower(): t for t in tables}
+        self._tables: dict[str, TableMeta] = {
+            t.name.lower(): t for t in _disambiguate(tables)
+        }
         self._relationships: list[RelationshipMeta] = list(relationships)
         self._by_table: dict[str, list[RelationshipMeta]] = {}
         for relationship in self._relationships:
@@ -317,6 +331,46 @@ class SchemaRegistry:
             if r.left_table.lower() in visible and r.right_table.lower() in visible
         ]
         return SchemaRegistry(tables, relationships, self.connection_id)
+
+
+def _disambiguate(tables: Iterable[TableMeta]) -> list[TableMeta]:
+    """
+    Give every table a registry-unique name.
+
+    Exposing several schemas at once means the same name can appear more than
+    once. Rather than dropping the duplicates -- which would quietly hide a
+    table someone needs -- the colliding ones are qualified with their schema,
+    and their columns are re-pointed at the new name so resolution still works.
+    """
+    tables = list(tables)
+    seen: dict[str, int] = {}
+    for table in tables:
+        seen[table.name.lower()] = seen.get(table.name.lower(), 0) + 1
+
+    out: list[TableMeta] = []
+    for table in tables:
+        if seen[table.name.lower()] == 1:
+            out.append(
+                table if table.physical_name else
+                TableMeta(**{**_as_dict(table), "physical_name": table.name})
+            )
+            continue
+
+        qualified = f"{table.schema}.{table.name}"
+        columns = tuple(
+            ColumnMeta(**{**_as_dict(column), "table": qualified}) for column in table.columns
+        )
+        out.append(
+            TableMeta(
+                **{
+                    **_as_dict(table),
+                    "name": qualified,
+                    "physical_name": table.physical_name or table.name,
+                    "columns": columns,
+                }
+            )
+        )
+    return out
 
 
 def _as_dict(obj) -> dict:

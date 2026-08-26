@@ -235,6 +235,34 @@ class DatabaseAdapter(ABC):
     # Introspection -- generic across dialects.
     # ------------------------------------------------------------------
     def introspect(self, schema: str | None = None) -> SchemaSnapshot:
+        """Read one schema, or every configured schema when none is named."""
+        schemas = [schema] if schema else self.configured_schemas()
+        if len(schemas) == 1:
+            return self._introspect_schema(schemas[0])
+
+        tables: list[TableMeta] = []
+        relationships: list[RelationshipMeta] = []
+        for name in schemas:
+            try:
+                part = self._introspect_schema(name)
+            except Exception:
+                # One unreadable schema must not cost us the others.
+                logger.warning("Could not introspect schema %s", name, exc_info=True)
+                continue
+            tables.extend(part.tables)
+            relationships.extend(part.relationships)
+
+        return SchemaSnapshot(
+            tables=tables,
+            relationships=relationships,
+            dialect=self.dialect,
+            scanned_at=time.time(),
+        )
+
+    def configured_schemas(self) -> list[str | None]:
+        return [self.default_schema()]
+
+    def _introspect_schema(self, schema: str | None = None) -> SchemaSnapshot:
         inspector = sa.inspect(self.engine)
         schema = schema or self.default_schema()
         estimates = self.row_estimates(schema)
@@ -284,6 +312,7 @@ class DatabaseAdapter(ABC):
             tables.append(
                 TableMeta(
                     name=name,
+                    physical_name=name,
                     schema=schema or "public",
                     kind="view" if is_view else "table",
                     category=categorize(name),
@@ -302,7 +331,7 @@ class DatabaseAdapter(ABC):
                 # metadata layer supports declaring the rest as a logical link.
                 relationships.append(
                     RelationshipMeta(
-                        id=f"fk_{name}_{constrained[0]}_{target}",
+                        id=f"fk_{schema}_{name}_{constrained[0]}_{target}",
                         left_table=target,
                         left_column=referred[0],
                         right_table=name,

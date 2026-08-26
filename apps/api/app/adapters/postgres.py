@@ -27,9 +27,24 @@ class PostgresAdapter(DatabaseAdapter):
         return True
 
     def default_schema(self) -> str | None:
+        return self.configured_schemas()[0]
+
+    def configured_schemas(self) -> list[str | None]:
+        """
+        DATABASE_SCHEMA accepts a comma-separated list.
+
+        A curated reporting schema is the right default, but the tables it does
+        not cover still have to be reachable -- so several can be exposed at
+        once, and the registry qualifies any name that appears in more than one.
+        """
         from app.core.config import settings
 
-        return settings.database_schema or "public"
+        names = [
+            part.strip()
+            for part in (settings.database_schema or "public").split(",")
+            if part.strip()
+        ]
+        return names or ["public"]
 
     def row_estimates(self, schema: str | None) -> dict[str, int]:
         """Planner statistics, not COUNT(*). Cheap on tables of any size."""
