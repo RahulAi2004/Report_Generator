@@ -209,6 +209,40 @@ class Report(Base):
     owner: Mapped[User] = relationship(back_populates="reports")
 
 
+class Dashboard(Base):
+    """
+    A saved dashboard.
+
+    Like a report, what is stored is the definition rather than any query it
+    produces (spec 16). A dashboard's window is stored relative -- "last 7 days",
+    not two dates -- so one saved today still reports the last seven days when it
+    is opened in March.
+    """
+
+    __tablename__ = "dashboards"
+
+    id: Mapped[str] = mapped_column(sa.String(32), primary_key=True, default=new_id)
+    name: Mapped[str] = mapped_column(sa.String(190))
+    description: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+    #: The full dashboard IR.
+    definition: Mapped[dict] = mapped_column(sa.JSON)
+    owner_id: Mapped[str] = mapped_column(sa.String(32), sa.ForeignKey("users.id"))
+
+    # -- Where it appears, in the taxonomy reports already use --------------
+    app: Mapped[str | None] = mapped_column(sa.String(80), nullable=True, index=True)
+    module: Mapped[str | None] = mapped_column(sa.String(80), nullable=True)
+
+    visibility: Mapped[str] = mapped_column(sa.String(20), default="private")
+    show_in_menu: Mapped[bool] = mapped_column(sa.Boolean, default=True)
+    is_default: Mapped[bool] = mapped_column(sa.Boolean, default=False)
+    is_archived: Mapped[bool] = mapped_column(sa.Boolean, default=False)
+
+    created_at: Mapped[datetime] = mapped_column(sa.DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(sa.DateTime, default=utcnow, onupdate=utcnow)
+    last_viewed_at: Mapped[datetime | None] = mapped_column(sa.DateTime, nullable=True)
+    view_count: Mapped[int] = mapped_column(sa.Integer, default=0)
+
+
 class ReportRun(Base):
     __tablename__ = "report_runs"
 
