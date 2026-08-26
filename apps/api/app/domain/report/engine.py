@@ -85,14 +85,15 @@ class ReportEngine:
         diagnostics = DiagnosticCollector()
         summary = definition.summary()
 
-        resolved = Resolver(self.registry).resolve(definition, diagnostics)
+        resolver = Resolver(self.registry)
+        resolved = resolver.resolve(definition, diagnostics)
         if diagnostics.has_errors:
             return BuildResult(None, diagnostics.items, summary=summary)
 
         plan = JoinPlanner(self.registry, self.options.max_joins).plan(
             tables=resolved.tables,
             primary_table=resolved.tables[0],
-            explicit_joins=definition.joins or None,
+            explicit_joins=resolver.canonical_joins(definition) or None,
             diagnostics=diagnostics,
         )
         if diagnostics.has_errors:

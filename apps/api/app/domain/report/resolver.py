@@ -22,6 +22,7 @@ from app.domain.report.ir import (
     FilterOperator,
     ReportColumn,
     ReportDefinition,
+    ReportJoin,
 )
 from app.domain.schema.registry import (
     Aggregation,
@@ -188,6 +189,30 @@ class Resolver:
                 continue
             resolved.append(table.name)
         return resolved
+
+    def canonical_joins(self, definition: ReportDefinition) -> list[ReportJoin]:
+        """
+        Declared joins, with their table names put through the registry.
+
+        A join saved as ``orders -> invoices`` still names those tables after a
+        second schema turns them into ``reporting.orders`` and
+        ``reporting.invoices``. Without this the planner compares the saved
+        names against the resolved ones, matches nothing, and reports a report
+        with perfectly good joins as having none.
+        """
+        canonical: list[ReportJoin] = []
+        for join in definition.joins:
+            left = self.registry.table(join.left_table)
+            right = self.registry.table(join.right_table)
+            if left is None or right is None:
+                # Left as-is; _resolve_tables has already said what is missing,
+                # and inventing a name here would only change the message.
+                canonical.append(join)
+                continue
+            canonical.append(
+                join.model_copy(update={"left_table": left.name, "right_table": right.name})
+            )
+        return canonical
 
     def _resolve_columns(
         self, definition: ReportDefinition, diagnostics: DiagnosticCollector
