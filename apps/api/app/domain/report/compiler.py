@@ -259,67 +259,199 @@ class ReportCompiler:
         outer_expressions: dict[str, Any] = {}
 
         for branch in analysis.pre_aggregated:
-            branch_root = branch.root_step.to_table
-            key_column = self._column(branch_root, branch.attach_column)
-            selections = [key_column.label(_JOIN_KEY)]
-            pending: list[tuple[ResolvedColumn, list[str]]] = []
-
-            for column in branch.aggregated_columns:
-                inner_column = self._masked_for(column)
-
-                if column.aggregation is Aggregation.AVG:
-                    # An average of averages is not the average. Carry the sum
-                    # and the count separately so the outer level can compute
-                    # the true figure.
-                    sum_key = f"{column.output_key}__sum"
-                    count_key = f"{column.output_key}__cnt"
-                    selections.append(sa.func.sum(inner_column).label(sum_key))
-                    selections.append(sa.func.count(inner_column).label(count_key))
-                    pending.append((column, [sum_key, count_key]))
-                else:
-                    selections.append(
-                        _AGGREGATE_FUNCTIONS[column.aggregation](inner_column).label(
-                            column.output_key
-                        )
-                    )
-                    pending.append((column, [column.output_key]))
-
-                if column.aggregation is Aggregation.COUNT_DISTINCT:
-                    diagnostics.warn(
-                        Code.FANOUT_INFLATION,
-                        f"{column.display_name} counts distinct values within each "
-                        f"{plan.root} row and then adds those counts up. A value "
-                        f"appearing under two different {plan.root} rows is counted "
-                        "twice. Group by that level if you need an exact figure.",
-                        section="columns",
-                        target=column.id,
-                    )
-
-            inner = sa.select(*selections).select_from(
-                self._branch_from_clause(branch, plan)
+            subquery, pending = self._aggregate_subtree(
+                branch.root_step.to_table,
+                branch.attach_column,
+                branch,
+                plan,
+                resolved,
+                parameters,
+                diagnostics,
             )
-
-            branch_filters = self._collect_conditions(
-                resolved.filters, only_tables=branch.tables
-            )
-            predicates = [
-                expression
-                for condition in branch_filters
-                if (expression := self._condition_expression(condition, parameters))
-                is not None
-            ]
-            if predicates:
-                inner = inner.where(sa.and_(*predicates))
-
-            subquery = inner.group_by(key_column).subquery(f"agg_{branch_root}")
             subqueries[branch.name] = subquery
-
             for column, keys in pending:
                 outer_expressions[column.output_key] = self._outer_aggregate(
                     column, subquery, keys
                 )
 
         return subqueries, outer_expressions
+
+    def _aggregate_subtree(
+        self,
+        node: str,
+        attach_column: str,
+        branch: Branch,
+        plan: JoinPlan,
+        resolved: ResolvedReport,
+        parameters: dict[str, Any],
+        diagnostics: DiagnosticCollector,
+    ):
+        """
+        Aggregate the sub-tree at ``node`` down to one row per join key.
+
+        Correcting only the branch's own edge is not enough. Customers to orders
+        to invoices to payments multiplies twice, and flattening the whole branch
+        into one grouped select repeats each order once per invoice -- so the
+        order count and the order value come back inflated while the invoice and
+        payment figures look right, which is the hardest kind of wrong number to
+        notice.
+
+        So every multiplying edge inside the branch gets the same treatment,
+        recursively: aggregate the child first, join the single row it produces,
+        and roll its figures up. Each level then sees one row per record, and SUM
+        at that level means what it says.
+        """
+        inline: set[str] = {node}
+        rolled: list[tuple[ResolvedColumn, list[str], Any]] = []
+        clause = self._assemble_subtree(
+            self._tables[node],
+            node,
+            branch,
+            plan,
+            resolved,
+            parameters,
+            diagnostics,
+            inline,
+            rolled,
+        )
+
+        key_column = self._column(node, attach_column)
+        selections = [key_column.label(_JOIN_KEY)]
+        pending: list[tuple[ResolvedColumn, list[str]]] = []
+
+        # Columns whose table sits at this grain aggregate directly.
+        for column in branch.aggregated_columns:
+            if column.table not in inline:
+                continue
+            inner_column = self._masked_for(column)
+
+            if column.aggregation is Aggregation.AVG:
+                # An average of averages is not the average. Carry the sum and
+                # the count separately so the outer level can compute the true
+                # figure.
+                sum_key = f"{column.output_key}__sum"
+                count_key = f"{column.output_key}__cnt"
+                selections.append(sa.func.sum(inner_column).label(sum_key))
+                selections.append(sa.func.count(inner_column).label(count_key))
+                pending.append((column, [sum_key, count_key]))
+            else:
+                selections.append(
+                    _AGGREGATE_FUNCTIONS[column.aggregation](inner_column).label(
+                        column.output_key
+                    )
+                )
+                pending.append((column, [column.output_key]))
+
+            if column.aggregation is Aggregation.COUNT_DISTINCT:
+                diagnostics.warn(
+                    Code.FANOUT_INFLATION,
+                    f"{column.display_name} counts distinct values within each "
+                    f"{plan.root} row and then adds those counts up. A value "
+                    f"appearing under two different {plan.root} rows is counted "
+                    "twice. Group by that level if you need an exact figure.",
+                    section="columns",
+                    target=column.id,
+                )
+
+        # Figures that arrived already aggregated from a deeper level are rolled
+        # up one more step rather than re-read from their table.
+        for column, keys, source in rolled:
+            for label, expression in self._rollup(column, keys, source):
+                selections.append(expression.label(label))
+            pending.append((column, keys))
+
+        inner = sa.select(*selections).select_from(clause)
+
+        # A filter lands at the level where its table is visible; deeper ones
+        # were already applied inside the nested sub-select.
+        predicates = [
+            expression
+            for condition in self._collect_conditions(resolved.filters, only_tables=inline)
+            if (expression := self._condition_expression(condition, parameters)) is not None
+        ]
+        if predicates:
+            inner = inner.where(sa.and_(*predicates))
+
+        return inner.group_by(key_column).subquery(f"agg_{node}"), pending
+
+    def _assemble_subtree(
+        self,
+        clause,
+        node: str,
+        branch: Branch,
+        plan: JoinPlan,
+        resolved: ResolvedReport,
+        parameters: dict[str, Any],
+        diagnostics: DiagnosticCollector,
+        inline: set[str],
+        rolled: list,
+    ):
+        """
+        Join everything under ``node`` reachable without multiplying rows, and
+        pre-aggregate everything that cannot be.
+
+        ``inline`` collects the tables that end up at this grain; ``rolled``
+        collects columns arriving pre-aggregated from a deeper level.
+        """
+        for step in [s for s in branch.steps if s.from_table == node]:
+            child = step.to_table
+            if step.multiplies_rows:
+                subquery, pending = self._aggregate_subtree(
+                    child,
+                    step.to_column,
+                    branch,
+                    plan,
+                    resolved,
+                    parameters,
+                    diagnostics,
+                )
+                clause = clause.join(
+                    subquery,
+                    self._column(node, step.from_column) == subquery.c[_JOIN_KEY],
+                    isouter=True,
+                )
+                rolled.extend((column, keys, subquery) for column, keys in pending)
+            else:
+                # At most one row, so it can be read at this grain directly.
+                clause = clause.join(
+                    self._tables[child],
+                    self._join_on(step.from_table, step.from_column, child, step.to_column),
+                    isouter=step.join_type is not JoinType.INNER,
+                )
+                inline.add(child)
+                clause = self._assemble_subtree(
+                    clause,
+                    child,
+                    branch,
+                    plan,
+                    resolved,
+                    parameters,
+                    diagnostics,
+                    inline,
+                    rolled,
+                )
+        return clause
+
+    @staticmethod
+    def _rollup(column: ResolvedColumn, keys: list[str], source):
+        """
+        Carry a nested level's figures up one grain, still as aggregates.
+
+        AVG keeps its sum and its count separate all the way to the top, where
+        the division finally happens -- dividing early averages the averages.
+        """
+        match column.aggregation:
+            case Aggregation.AVG:
+                return [
+                    (keys[0], sa.func.sum(source.c[keys[0]])),
+                    (keys[1], sa.func.sum(source.c[keys[1]])),
+                ]
+            case Aggregation.MIN:
+                return [(keys[0], sa.func.min(source.c[keys[0]]))]
+            case Aggregation.MAX:
+                return [(keys[0], sa.func.max(source.c[keys[0]]))]
+            case _:
+                return [(keys[0], sa.func.sum(source.c[keys[0]]))]
 
     @staticmethod
     def _outer_aggregate(column: ResolvedColumn, subquery, keys: list[str]):
@@ -348,21 +480,6 @@ class ReportCompiler:
         if column.aggregation in (Aggregation.MIN, Aggregation.MAX):
             return self._masked(expression, column.meta)
         return expression
-
-    def _branch_from_clause(self, branch: Branch, plan: JoinPlan):
-        """FROM clause internal to a branch: its root table plus its own sub-joins."""
-        clause = self._tables[branch.root_step.to_table]
-        for step in branch.steps:
-            if step.from_table == plan.root:
-                continue  # the attachment edge lives in the outer query
-            clause = clause.join(
-                self._tables[step.to_table],
-                self._join_on(
-                    step.from_table, step.from_column, step.to_table, step.to_column
-                ),
-                isouter=step.join_type is not JoinType.INNER,
-            )
-        return clause
 
     # ------------------------------------------------------------------
     def _build_from(
@@ -604,11 +721,31 @@ class ReportCompiler:
             )
             inner = (
                 sa.select(sa.literal(1))
-                .select_from(self._branch_from_clause(branch, plan))
+                .select_from(self._flat_branch_from(branch, plan))
                 .where(sa.and_(link, *predicates))
             )
             statement = statement.where(sa.exists(inner))
         return statement
+
+    def _flat_branch_from(self, branch: Branch, plan: JoinPlan):
+        """
+        A branch flattened into ordinary joins, however much it multiplies.
+
+        Only EXISTS uses this. It asks whether a matching row exists at all, so
+        duplicate rows change nothing -- no aggregate is computed over them.
+        """
+        clause = self._tables[branch.root_step.to_table]
+        for step in branch.steps:
+            if step.from_table == plan.root:
+                continue  # the attachment edge lives in the outer query
+            clause = clause.join(
+                self._tables[step.to_table],
+                self._join_on(
+                    step.from_table, step.from_column, step.to_table, step.to_column
+                ),
+                isouter=step.join_type is not JoinType.INNER,
+            )
+        return clause
 
     def _collect_conditions(self, node, only_tables: set[str]) -> list[ResolvedCondition]:
         found: list[ResolvedCondition] = []
