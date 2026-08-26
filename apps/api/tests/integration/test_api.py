@@ -624,3 +624,59 @@ def test_column_headings_cannot_inject_sql(client, admin):
         assert client.get("/api/v1/auth/me", headers=admin).status_code == 200
     finally:
         client.delete(f"/api/v1/uploads/{body['id']}", headers=admin)
+
+
+# ---------------------------------------------------------------------------
+# Filter value discovery
+# ---------------------------------------------------------------------------
+def test_column_values_are_listed(client, admin):
+    """
+    Typing a filter value from memory is how a report ends up quietly empty --
+    'delivered' instead of 'Delivered' matches nothing and explains nothing.
+    """
+    response = client.get(
+        "/api/v1/schema/tables/sales_orders/columns/status/values", headers=admin
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["supported"] is True
+    assert len(body["values"]) > 0
+    assert all(isinstance(v, str) for v in body["values"])
+
+
+def test_column_values_can_be_searched(client, admin):
+    response = client.get(
+        "/api/v1/schema/tables/sales_orders/columns/status/values?search=ship",
+        headers=admin,
+    )
+    assert response.status_code == 200
+    values = response.json()["values"]
+    assert all("ship" in v.lower() for v in values)
+
+
+def test_column_values_refuses_a_column_you_cannot_see(client, admin):
+    response = client.get(
+        "/api/v1/schema/tables/sales_orders/columns/no_such_field/values", headers=admin
+    )
+    assert response.status_code == 404
+
+
+def test_column_values_declines_high_cardinality_types(client, admin):
+    """Listing every timestamp helps nobody and scans the table to prove it."""
+    response = client.get(
+        "/api/v1/schema/tables/sales_orders/columns/created_at/values", headers=admin
+    )
+    assert response.status_code == 200
+    assert response.json()["supported"] is False
+
+
+def test_deleting_a_report_removes_it_from_the_list(client, admin):
+    created = client.post(
+        "/api/v1/reports", headers=admin,
+        json={"name": "Temporary", "definition": SIMPLE_REPORT},
+    ).json()
+
+    assert client.delete(f"/api/v1/reports/{created['id']}", headers=admin).status_code == 200
+
+    names = [r["name"] for r in client.get("/api/v1/reports", headers=admin).json()["reports"]]
+    assert "Temporary" not in names

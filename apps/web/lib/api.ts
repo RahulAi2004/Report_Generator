@@ -66,6 +66,13 @@ export const api = {
       `/schema/tables${search ? `?search=${encodeURIComponent(search)}` : ''}`,
     ),
   table: (name: string) => request<SchemaTable>(`/schema/tables/${encodeURIComponent(name)}`),
+  /** The values a column actually contains, for the filter editor. */
+  columnValues: (table: string, column: string, search?: string) =>
+    request<{ values: string[]; supported: boolean; truncated?: boolean; reason?: string }>(
+      `/schema/tables/${encodeURIComponent(table)}/columns/${encodeURIComponent(column)}/values` +
+        (search ? `?search=${encodeURIComponent(search)}` : ''),
+    ),
+
   relationships: () => request<{ relationships: Relationship[] }>('/schema/relationships'),
   relationshipSuggestions: () =>
     request<{ suggestions: RelationshipSuggestion[] }>('/schema/relationships/suggestions'),
@@ -194,6 +201,8 @@ export const api = {
     request<{ id: string; name: string; definition: ReportDefinition }>(`/reports/${id}`),
   createReport: (name: string, definition: ReportDefinition, description?: string) =>
     post<{ id: string; name: string }>('/reports', { name, definition, description }),
+  deleteReport: (id: string) =>
+    request<{ ok: boolean }>(`/reports/${id}`, { method: 'DELETE' }),
   updateReport: (id: string, name: string, definition: ReportDefinition) =>
     request<{ id: string; name: string }>(`/reports/${id}`, {
       method: 'PUT',

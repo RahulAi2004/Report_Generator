@@ -461,6 +461,7 @@ export default function BuilderPage() {
             onAddSort={builder.addSort}
             onUpdateSort={builder.updateSort}
             onRemoveSort={builder.removeSort}
+            onSetRowLimit={builder.setRowLimit}
           />
 
           <PreviewTable

@@ -17,7 +17,12 @@ from app.core.db import get_session
 from app.core.deps import current_principal, require, write_audit
 from app.core.security import Permission, Principal
 from app.domain.report.resolver import legal_operators
-from app.domain.schema.registry import Aggregation, RelationshipSource, TableMeta
+from app.domain.schema.registry import (
+    Aggregation,
+    DataType,
+    RelationshipSource,
+    TableMeta,
+)
 from app.models.metadata_models import LogicalRelationship
 from app.adapters.factory import get_adapter
 from app.core.config import settings
@@ -106,6 +111,98 @@ def get_table(
     if table is None:
         raise HTTPException(status_code=404, detail="That table is not available to you.")
     return _table_payload(table, include_columns=True)
+
+
+#: Distinct-value lookups are cached briefly. The filter editor asks for them as
+#: the user types, and each one is a scan the operational database did not ask
+#: for.
+_VALUES_CACHE: dict[tuple, tuple[float, list]] = {}
+_VALUES_TTL = 120.0
+#: Beyond this a picker stops being useful and starts being a table dump.
+MAX_DISTINCT_VALUES = 200
+
+
+@router.get("/tables/{table_name}/columns/{column_name}/values")
+def column_values(
+    table_name: str,
+    column_name: str,
+    search: str | None = Query(default=None, max_length=100),
+    db: DbSession = Depends(get_session),
+    principal: Principal = Depends(current_principal),
+):
+    """
+    The values a column actually holds.
+
+    Without this a filter has to be typed from memory, and 'delivered' instead
+    of 'Delivered' returns an empty report with nothing to explain why -- which
+    is the most common way a correct-looking report is quietly wrong.
+    """
+    import time
+
+    registry = schema_service.build_registry(db, principal)
+    column = registry.column(table_name, column_name)
+    if column is None:
+        raise HTTPException(status_code=404, detail="That field is not available to you.")
+
+    if column.data_type in (DataType.DATE, DataType.DATETIME, DataType.TIME,
+                            DataType.JSON, DataType.BINARY):
+        # Listing every timestamp helps nobody.
+        return {"values": [], "supported": False, "reason": "not a categorical field"}
+
+    key = (table_name.lower(), column_name.lower(), (search or "").lower())
+    cached = _VALUES_CACHE.get(key)
+    now = time.monotonic()
+    if cached and now - cached[0] < _VALUES_TTL:
+        return {"values": cached[1], "supported": True, "cached": True}
+
+    table_meta = registry.table(table_name)
+    adapter = get_adapter()
+
+    import sqlalchemy as sa
+
+    from app.domain.report.compiler import _SA_TYPES, LIKE_ESCAPE
+
+    source = sa.Table(
+        table_meta.name,
+        sa.MetaData(),
+        sa.Column(column.name, _SA_TYPES[column.data_type]()),
+        schema=table_meta.schema if table_meta.schema not in (None, "public") else None,
+    )
+    target = source.c[column.name]
+    # Enum columns have no comparison or pattern operator against text.
+    comparable = sa.cast(target, sa.Text) if column.is_enum else target
+
+    statement = sa.select(sa.distinct(comparable).label("value")).where(target.isnot(None))
+    if search:
+        # Reuses the compiler's escaping so a literal % in a search term behaves
+        # the same here as it does in a report filter.
+        from app.domain.report.compiler import _like
+
+        statement = statement.where(
+            sa.cast(target, sa.Text).ilike(_like(search, "%{}%"), escape=LIKE_ESCAPE)
+        )
+    statement = statement.order_by(sa.text("value")).limit(MAX_DISTINCT_VALUES + 1)
+
+    try:
+        if table_meta.kind == "upload":
+            from app.services import hybrid_executor
+
+            outcome = hybrid_executor._execute_local(statement, max_rows=MAX_DISTINCT_VALUES + 1)
+        else:
+            outcome = adapter.execute(statement, max_rows=MAX_DISTINCT_VALUES + 1)
+    except Exception:
+        # A picker that cannot load must not stop someone typing a value.
+        return {"values": [], "supported": False, "reason": "could not be listed"}
+
+    values = [row[0] for row in outcome.rows if row[0] is not None]
+    truncated = len(values) > MAX_DISTINCT_VALUES
+    values = [str(v) for v in values[:MAX_DISTINCT_VALUES]]
+
+    _VALUES_CACHE[key] = (now, values)
+    if len(_VALUES_CACHE) > 500:
+        _VALUES_CACHE.clear()
+
+    return {"values": values, "supported": True, "truncated": truncated}
 
 
 @router.get("/relationships")

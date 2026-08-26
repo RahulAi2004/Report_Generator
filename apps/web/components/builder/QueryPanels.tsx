@@ -1,6 +1,7 @@
 'use client';
 
 import { Badge, Button, IconButton, Select } from '@/components/ui/primitives';
+import { MultiValuePicker, ValuePicker } from '@/components/builder/ValuePicker';
 import {
   LIST_VALUE_OPERATORS,
   NO_VALUE_OPERATORS,
@@ -39,6 +40,7 @@ export function QueryPanels({
   onAddSort,
   onUpdateSort,
   onRemoveSort,
+  onSetRowLimit,
 }: {
   definition: ReportDefinition;
   tables: Record<string, SchemaTable>;
@@ -51,6 +53,7 @@ export function QueryPanels({
   onAddSort: (columnId: string) => void;
   onUpdateSort: (index: number, patch: { column_id?: string; direction?: 'asc' | 'desc' }) => void;
   onRemoveSort: (index: number) => void;
+  onSetRowLimit: (limit: number) => void;
 }) {
   const fieldOptions = definition.tables.flatMap((tableName) =>
     (tables[tableName]?.columns ?? []).map((column) => ({
@@ -145,23 +148,48 @@ export function QueryPanels({
                   className="w-[124px] py-1 text-xs"
                 />
 
-                {!needsNoValue && (
+                {!needsNoValue && isList && (
+                  <MultiValuePicker
+                    table={condition.table}
+                    field={condition.field}
+                    values={condition.values.map(String)}
+                    onChange={(values) => onUpdateFilter(condition.id!, { values })}
+                  />
+                )}
+
+                {!needsNoValue && !isList && (
                   <>
-                    <input
-                      type={inputType}
-                      value={String(condition.values[0] ?? '')}
-                      placeholder={isList ? 'Comma separated' : 'Value'}
-                      onChange={(event) => {
-                        const raw = event.target.value;
-                        const values = isList
-                          ? raw.split(',').map((part) => part.trim()).filter(Boolean)
-                          : [raw];
-                        onUpdateFilter(condition.id!, {
-                          values: needsTwo ? [raw, condition.values[1] ?? ''] : values,
-                        });
-                      }}
-                      className="field w-[130px] flex-1 py-1 text-xs"
-                    />
+                    {/* Dates get a real date input; everything else can offer
+                        the values the column actually holds. */}
+                    {inputType === 'date' || inputType === 'number' ? (
+                      <input
+                        type={inputType}
+                        value={String(condition.values[0] ?? '')}
+                        placeholder="Value"
+                        onChange={(event) =>
+                          onUpdateFilter(condition.id!, {
+                            values: needsTwo
+                              ? [event.target.value, condition.values[1] ?? '']
+                              : [event.target.value],
+                          })
+                        }
+                        className="field w-[130px] flex-1 py-1 text-xs"
+                      />
+                    ) : (
+                      <ValuePicker
+                        table={condition.table}
+                        field={condition.field}
+                        value={String(condition.values[0] ?? '')}
+                        placeholder="Value"
+                        className="w-[150px] flex-1"
+                        onChange={(value) =>
+                          onUpdateFilter(condition.id!, {
+                            values: needsTwo ? [value, condition.values[1] ?? ''] : [value],
+                          })
+                        }
+                      />
+                    )}
+
                     {needsTwo && (
                       <>
                         <span className="text-2xs text-ink-faint">and</span>
@@ -307,6 +335,24 @@ export function QueryPanels({
               </IconButton>
             </div>
           ))}
+
+          {/* The row limit belongs with sorting: both decide what comes back,
+              rather than what is in the report. */}
+          <div className="flex items-center gap-2 border-t border-line pt-2">
+            <label htmlFor="row-limit" className="shrink-0 text-xs text-ink-muted">
+              Row limit
+            </label>
+            <Select
+              value={String(definition.row_limit)}
+              onChange={(value) => onSetRowLimit(Number(value))}
+              options={[50, 100, 500, 1000, 5000, 10000, 50000].map((n) => ({
+                value: String(n),
+                label: n.toLocaleString(),
+              }))}
+              className="w-[104px] py-1 text-xs"
+            />
+            <span className="text-2xs text-ink-faint">rows max</span>
+          </div>
         </div>
       </section>
     </div>
