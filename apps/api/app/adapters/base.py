@@ -340,6 +340,8 @@ class DatabaseAdapter(ABC):
                         default_join_type=JoinType.LEFT,
                         source=RelationshipSource.PHYSICAL,
                         confidence=1.0,
+                        left_schema=schema,
+                        right_schema=schema,
                     )
                 )
 

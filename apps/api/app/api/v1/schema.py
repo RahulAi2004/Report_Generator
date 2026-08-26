@@ -286,6 +286,8 @@ def create_relationships(
             skipped += 1
             continue
 
+        left = registry.table(item.left_table)
+        right = registry.table(item.right_table)
         db.add(
             LogicalRelationship(
                 connection_id=schema_service.DEFAULT_CONNECTION_ID,
@@ -293,6 +295,8 @@ def create_relationships(
                 left_column=item.left_column,
                 right_table=item.right_table,
                 right_column=item.right_column,
+                left_schema=left.schema if left else None,
+                right_schema=right.schema if right else None,
                 cardinality=item.cardinality,
                 default_join_type=item.join_type,
                 source=RelationshipSource.INFERRED.value,

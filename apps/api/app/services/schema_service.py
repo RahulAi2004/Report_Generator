@@ -122,6 +122,8 @@ def build_registry(
                 default_join_type=JoinType(logical.default_join_type),
                 source=RelationshipSource(logical.source),
                 confidence=logical.confidence,
+                left_schema=logical.left_schema,
+                right_schema=logical.right_schema,
             )
         )
 

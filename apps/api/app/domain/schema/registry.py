@@ -191,6 +191,11 @@ class RelationshipMeta:
     default_join_type: JoinType = JoinType.LEFT
     source: RelationshipSource = RelationshipSource.PHYSICAL
     confidence: float = 1.0
+    #: Which schema each side came from. Needed once several schemas are
+    #: exposed: a relationship stored as "customers" is ambiguous the moment
+    #: two schemas both have one.
+    left_schema: str | None = None
+    right_schema: str | None = None
 
     @property
     def cost(self) -> float:
@@ -245,7 +250,9 @@ class SchemaRegistry:
         self._tables: dict[str, TableMeta] = {
             t.name.lower(): t for t in _disambiguate(tables)
         }
-        self._relationships: list[RelationshipMeta] = list(relationships)
+        self._relationships: list[RelationshipMeta] = _resolve_relationships(
+            relationships, self._tables
+        )
         self._by_table: dict[str, list[RelationshipMeta]] = {}
         for relationship in self._relationships:
             self._by_table.setdefault(relationship.left_table.lower(), []).append(relationship)
@@ -367,6 +374,57 @@ def _disambiguate(tables: Iterable[TableMeta]) -> list[TableMeta]:
                     "name": qualified,
                     "physical_name": table.physical_name or table.name,
                     "columns": columns,
+                }
+            )
+        )
+    return out
+
+
+def _resolve_relationships(
+    relationships: Iterable[RelationshipMeta], tables: dict[str, TableMeta]
+) -> list[RelationshipMeta]:
+    """
+    Point every relationship at the names the registry actually uses.
+
+    Relationships are stored by table name, but a name gets qualified the moment
+    two schemas both contain it -- so a relationship saved before that would
+    silently stop matching, and every report using it would report that the
+    tables are unconnected.
+
+    Where a side names its schema, that wins. Where it does not and the bare
+    name is ambiguous, the first schema holding it is used, which is the one
+    that was in effect when the relationship was created.
+    """
+    by_real: dict[str, list[str]] = {}
+    for key, table in tables.items():
+        by_real.setdefault(table.real_name.lower(), []).append(key)
+
+    def resolve(name: str, schema: str | None) -> str | None:
+        lowered = name.lower()
+        if lowered in tables:
+            return lowered
+        if schema:
+            qualified = f"{schema}.{name}".lower()
+            if qualified in tables:
+                return qualified
+        candidates = by_real.get(lowered)
+        return candidates[0] if candidates else None
+
+    out: list[RelationshipMeta] = []
+    for relationship in relationships:
+        left = resolve(relationship.left_table, relationship.left_schema)
+        right = resolve(relationship.right_table, relationship.right_schema)
+        if left is None or right is None or left == right:
+            continue
+        if left == relationship.left_table.lower() and right == relationship.right_table.lower():
+            out.append(relationship)
+            continue
+        out.append(
+            RelationshipMeta(
+                **{
+                    **{slot: getattr(relationship, slot) for slot in relationship.__slots__},
+                    "left_table": tables[left].name,
+                    "right_table": tables[right].name,
                 }
             )
         )

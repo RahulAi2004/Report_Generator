@@ -152,6 +152,10 @@ class LogicalRelationship(Base):
     left_column: Mapped[str] = mapped_column(sa.String(190))
     right_table: Mapped[str] = mapped_column(sa.String(190))
     right_column: Mapped[str] = mapped_column(sa.String(190))
+    #: Recorded so the relationship still resolves once a table name has to be
+    #: qualified because another schema contains the same name.
+    left_schema: Mapped[str | None] = mapped_column(sa.String(80), nullable=True)
+    right_schema: Mapped[str | None] = mapped_column(sa.String(80), nullable=True)
     cardinality: Mapped[str] = mapped_column(sa.String(10), default="1:N")
     default_join_type: Mapped[str] = mapped_column(sa.String(10), default="left")
     source: Mapped[str] = mapped_column(sa.String(20), default="manual")
