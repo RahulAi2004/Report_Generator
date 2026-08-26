@@ -22,6 +22,7 @@ export function DataSourcePanel({
   onToggleTable,
   onSelectTable,
   onSetPrimary,
+  onAddAllFields,
 }: {
   categories: SchemaCategory[];
   loading: boolean;
@@ -31,6 +32,8 @@ export function DataSourcePanel({
   onToggleTable: (table: SchemaTable) => void;
   onSelectTable: (table: string) => void;
   onSetPrimary: (table: string) => void;
+  /** Add every field of a table in one action, without opening it first. */
+  onAddAllFields?: (table: SchemaTable) => void;
 }) {
   const [search, setSearch] = useState('');
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
@@ -172,6 +175,22 @@ export function DataSourcePanel({
                         >
                           {table.label}
                         </span>
+
+                        {onAddAllFields && (
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              onAddAllFields(table);
+                            }}
+                            title={`Add all ${table.column_count} fields of ${table.label}`}
+                            className="hidden shrink-0 rounded border border-line bg-white px-1
+                                       text-2xs text-ink-muted hover:border-accent-border
+                                       hover:bg-accent-soft hover:text-accent group-hover:block"
+                          >
+                            + all
+                          </button>
+                        )}
 
                         {isPrimary ? (
                           <Badge tone="accent">Primary</Badge>

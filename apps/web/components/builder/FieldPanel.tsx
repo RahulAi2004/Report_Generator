@@ -17,11 +17,14 @@ export function FieldPanel({
   loading,
   selectedFields,
   onToggleField,
+  onSelectMany,
 }: {
   table: SchemaTable | null;
   loading: boolean;
   selectedFields: Set<string>;
   onToggleField: (table: string, column: SchemaColumn) => void;
+  /** Add or remove a whole set at once, as one edit rather than many. */
+  onSelectMany?: (table: string, columns: SchemaColumn[], selected: boolean) => void;
 }) {
   const [search, setSearch] = useState('');
 
@@ -35,6 +38,28 @@ export function FieldPanel({
         column.label.toLowerCase().includes(needle),
     );
   }, [table, search]);
+
+  // Select-all acts on what is currently listed. With a search active that is
+  // the matching fields, which is almost always what was meant.
+  const shown = columns;
+  const chosen = shown.filter((column) => selectedFields.has(`${table?.name}.${column.name}`));
+  const allChosen = shown.length > 0 && chosen.length === shown.length;
+  const someChosen = chosen.length > 0 && !allChosen;
+
+  function toggleAll(next: boolean) {
+    if (!table || shown.length === 0) return;
+    if (onSelectMany) {
+      const changing = next
+        ? shown.filter((c) => !selectedFields.has(`${table.name}.${c.name}`))
+        : chosen;
+      onSelectMany(table.name, changing, next);
+      return;
+    }
+    for (const column of next ? shown : chosen) {
+      const already = selectedFields.has(`${table.name}.${column.name}`);
+      if (already !== next) onToggleField(table.name, column);
+    }
+  }
 
   return (
     <aside className="flex w-[212px] shrink-0 flex-col border-r border-line bg-white">
@@ -50,6 +75,30 @@ export function FieldPanel({
           className="field text-sm"
         />
       </div>
+
+      {table && shown.length > 0 && (
+        <div className="flex items-center justify-between gap-2 border-y border-line
+                        bg-canvas px-3 py-1.5">
+          <Checkbox
+            checked={allChosen}
+            indeterminate={someChosen}
+            onChange={toggleAll}
+            title={
+              search
+                ? `Select the ${shown.length} fields matching “${search}”`
+                : `Select all ${shown.length} fields`
+            }
+            label={
+              <span className="text-xs font-medium">
+                {allChosen ? 'Clear all' : search ? 'Select matching' : 'Select all'}
+              </span>
+            }
+          />
+          <span className="shrink-0 text-2xs tabular text-ink-faint">
+            {chosen.length}/{shown.length}
+          </span>
+        </div>
+      )}
 
       <div className="flex-1 overflow-y-auto">
         {loading && (

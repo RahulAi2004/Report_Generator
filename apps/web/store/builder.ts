@@ -45,6 +45,8 @@ interface BuilderState {
   addColumn: (table: string, column: SchemaColumn) => void;
   removeColumn: (id: string) => void;
   toggleField: (table: string, column: SchemaColumn) => void;
+  /** Add or remove a set of fields as a single edit. */
+  setFieldsSelected: (table: string, columns: SchemaColumn[], selected: boolean) => void;
   updateColumn: (id: string, patch: Partial<ReportColumn>) => void;
   moveColumn: (id: string, direction: -1 | 1) => void;
   selectColumn: (id: string | null) => void;
@@ -194,6 +196,65 @@ export const useBuilder = create<BuilderState>((set, get) => ({
     if (existing) get().removeColumn(existing.id);
     else get().addColumn(table, column);
   },
+
+  setFieldsSelected: (table, columns, selected) =>
+    set((state) => {
+      // One update rather than one per field: selecting every column of a wide
+      // table would otherwise re-render the builder dozens of times.
+      const { definition } = state;
+      if (columns.length === 0) return state;
+
+      if (!selected) {
+        const dropping = new Set(columns.map((column) => `${table}.${column.name}`));
+        const kept = definition.columns.filter(
+          (column) => !dropping.has(`${column.table}.${column.field}`),
+        );
+        const keptIds = new Set(kept.map((column) => column.id));
+        return {
+          dirty: true,
+          selectedColumnId: keptIds.has(state.selectedColumnId ?? '')
+            ? state.selectedColumnId
+            : null,
+          definition: {
+            ...definition,
+            columns: kept,
+            sort_by: definition.sort_by.filter((sort) => keptIds.has(sort.column_id)),
+            group_by: definition.group_by.filter(
+              (group) => !dropping.has(`${group.table}.${group.field}`),
+            ),
+          },
+        };
+      }
+
+      const existing = new Set(
+        definition.columns.map((column) => `${column.table}.${column.field}`),
+      );
+      const added = columns
+        .filter((column) => !existing.has(`${table}.${column.name}`))
+        .map((column) => ({
+          id: nextId('col_'),
+          table,
+          field: column.name,
+          display_name: column.label,
+          aggregation: 'none' as const,
+          visible: true,
+          conditional_formats: [],
+        }));
+      if (added.length === 0) return state;
+
+      return {
+        dirty: true,
+        selectedColumnId: added[added.length - 1].id,
+        definition: {
+          ...definition,
+          tables: definition.tables.includes(table)
+            ? definition.tables
+            : [...definition.tables, table],
+          primary_table: definition.primary_table || table,
+          columns: [...definition.columns, ...added],
+        },
+      };
+    }),
 
   updateColumn: (id, patch) =>
     set((state) => ({

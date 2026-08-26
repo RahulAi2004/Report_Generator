@@ -9,7 +9,7 @@
  */
 
 import clsx from 'clsx';
-import type { ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 
 export function Button({
   variant = 'default',
@@ -33,25 +33,39 @@ export function Button({
 
 export function Checkbox({
   checked,
+  indeterminate,
   onChange,
   disabled,
   label,
   id,
+  title,
 }: {
   checked: boolean;
+  /** Some but not all of the group is selected. */
+  indeterminate?: boolean;
   onChange: (checked: boolean) => void;
   disabled?: boolean;
   label?: ReactNode;
   id?: string;
+  title?: string;
 }) {
+  // `indeterminate` is a DOM property, not an attribute, so React cannot set it
+  // declaratively.
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (ref.current) ref.current.indeterminate = Boolean(indeterminate) && !checked;
+  }, [indeterminate, checked]);
+
   return (
     <label
+      title={title}
       className={clsx(
         'flex items-center gap-2',
         disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer',
       )}
     >
       <input
+        ref={ref}
         id={id}
         type="checkbox"
         checked={checked}

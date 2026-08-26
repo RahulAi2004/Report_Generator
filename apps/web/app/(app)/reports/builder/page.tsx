@@ -2,7 +2,7 @@
 
 import clsx from 'clsx';
 
-import { useMutation, useQueries, useQuery } from '@tanstack/react-query';
+import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ColumnGrid } from '@/components/builder/ColumnGrid';
 import { ColumnInspector } from '@/components/builder/ColumnInspector';
@@ -38,6 +38,7 @@ export default function BuilderPage() {
   const { definition, selectedTable, selectedColumnId, reportName } = builder;
 
   const [validation, setValidation] = useState<ValidationResult | null>(null);
+  const queryClient = useQueryClient();
   const [preview, setPreview] = useState<PreviewResult | null>(null);
   const [totalRows, setTotalRows] = useState<number | null>(null);
   const [exporting, setExporting] = useState<string | null>(null);
@@ -406,12 +407,23 @@ export default function BuilderPage() {
             onToggleTable={builder.toggleTable}
             onSelectTable={builder.selectTable}
             onSetPrimary={builder.setPrimaryTable}
+            onAddAllFields={async (table) => {
+              // The list panel only holds summaries, so the columns are fetched
+              // before adding them.
+              const full = await queryClient.fetchQuery({
+                queryKey: ['table', table.name],
+                queryFn: () => api.table(table.name),
+              });
+              builder.setFieldsSelected(table.name, full.columns ?? [], true);
+              builder.selectTable(table.name);
+            }}
           />
           <FieldPanel
             table={activeTableQuery.data ?? null}
             loading={activeTableQuery.isLoading}
             selectedFields={selectedFields}
             onToggleField={builder.toggleField}
+            onSelectMany={builder.setFieldsSelected}
           />
         </div>
 
