@@ -250,6 +250,12 @@ class SchemaRegistry:
         self._tables: dict[str, TableMeta] = {
             t.name.lower(): t for t in _disambiguate(tables)
         }
+        #: Physical name -> the table holding it, first schema wins. This is
+        #: what lets a definition saved before a collision existed keep working.
+        self._by_real_name: dict[str, TableMeta] = {}
+        for table in self._tables.values():
+            self._by_real_name.setdefault(table.real_name.lower(), table)
+
         self._relationships: list[RelationshipMeta] = _resolve_relationships(
             relationships, self._tables
         )
@@ -268,7 +274,15 @@ class SchemaRegistry:
         return list(self._relationships)
 
     def table(self, name: str) -> TableMeta | None:
-        return self._tables.get(name.lower())
+        found = self._tables.get(name.lower())
+        if found is not None:
+            return found
+        # A name saved before another schema was exposed. Qualification only
+        # happens on collision, so a bare name that no longer resolves is one
+        # whose table has since acquired a namesake -- not one that has gone.
+        # Reports and dashboards written back then still mean the schema that
+        # was configured then, which is the first one listed.
+        return self._by_real_name.get(_strip_schema(name).lower())
 
     def column(self, table: str, column: str) -> ColumnMeta | None:
         found = self.table(table)
@@ -338,6 +352,11 @@ class SchemaRegistry:
             if r.left_table.lower() in visible and r.right_table.lower() in visible
         ]
         return SchemaRegistry(tables, relationships, self.connection_id)
+
+
+def _strip_schema(name: str) -> str:
+    """The bare table name, whether or not it arrived qualified."""
+    return name.rsplit(".", 1)[-1]
 
 
 def _disambiguate(tables: Iterable[TableMeta]) -> list[TableMeta]:
