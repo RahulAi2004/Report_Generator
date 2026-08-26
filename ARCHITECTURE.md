@@ -345,6 +345,44 @@ Authorized roles see the formatted, read-only generated SQL (`sqlglot` pretty-pr
 
 ---
 
+## E-bis. Dashboard Layer — Metric Cards, Shared Filters, Embedded Reports
+
+A dashboard is a saved definition, never SQL, for the same reason a report is not (§16). It carries its placement, a time range, metric cards, dashboard-level filters, embedded report panels, and viewer settings.
+
+### The central decision: dashboards compile down to reports
+
+A metric card is a report with one aggregated column and no grouping. An embedded panel is a saved report with the dashboard's filters added. Both are translated into ordinary `ReportDefinition` documents by `app/domain/dashboard/builder.py` and handed to the report engine.
+
+Nothing in the dashboard layer touches a database. That is the point: dashboards inherit column masking, the read-only guard, parameterisation, join planning and fan-out correction because they *use* the report path rather than paralleling it. There is one place in this application where a query is built, and adding dashboards did not make it two.
+
+### The window is stored relative, not resolved
+
+`TimeRange` holds `preset` + `mode` + `periods` ("last 30 days"), not two dates. A dashboard saved in August still reports the last thirty days when opened in March; a resolved range would go stale while continuing to look current. Dates are computed per request, once, so a dashboard rendered across midnight does not measure its cards over two different windows.
+
+The comparison window ("vs previous period") is the same length as the current one and adjacent to it rather than overlapping — an overlap would count the same days on both sides of the comparison. The comparison report differs from the current one *only* in its window, so the percentage measures the period and nothing else.
+
+A window is meaningless without a column to measure it against, so a time range names a date field, and a card may override it. `suggest_date_field()` prefers a business date (`order_date`, `invoice_date`) over a row-creation timestamp: an order placed in June and entered in July belongs to June on any report a person would recognise.
+
+### Filters report what they actually did
+
+This is the failure mode the layer is engineered against: a dashboard whose chips claim more than its queries did.
+
+- A filter whose table a panel does not read **cannot** apply. It is returned in `not_applicable` and rendered struck through — not hidden. A missing chip reads as "no filter" and a present one reads as "filtered"; neither is true.
+- A filter naming a table a metric card does not otherwise read pulls that table in, so "Status: Delivered" means the same thing on every card rather than silently meaning different things.
+- A filter with no value is "All": a control that is present but not narrowing. It is neither applied nor reported as inapplicable.
+- A panel with no date column to measure reports `time_range_applied: false`, so it can say it is showing all time while its neighbours show a period.
+- A card that cannot be computed fails alone. One broken card does not take the dashboard down.
+
+### Captions are computed, never typed
+
+The line under a number ("vs previous 30 days", "8.9% of 123 total") comes from the server alongside the value, so it cannot drift away from the figure above it. A percentage against a base of zero is reported as a direction and a difference rather than as infinite growth — it is undefined, not large.
+
+### Schema evolution
+
+Table names saved before a second schema was exposed still resolve. Qualification only happens on collision, so a bare name that no longer resolves names a table that has acquired a namesake rather than one that has gone; the registry falls back to the physical name, resolving to the first schema configured. This is applied in `SchemaRegistry.table()` — one place every caller goes through — and a report's declared joins are canonicalised the same way, since resolving the table list alone leaves a report's own join choices pointing at names the planner no longer recognises.
+
+---
+
 ## F. Anomaly Engine Design
 
 Two clearly separated detector families, sharing one anomaly store, one investigation workflow, and — critically — the same compiler and safety layer as reports. Anomaly rules cannot reach the database any way a report cannot.
@@ -526,6 +564,12 @@ Reports     GET|POST /reports · GET|PUT|DELETE /reports/{id}
             POST /reports/preview         # IR → paginated rows
             POST /reports/{id}/run        POST /reports/{id}/sql   # inspector
             POST /reports/{id}/export     GET  /exports/{job_id}
+
+Dashboards  GET|POST /dashboards · GET|PUT|DELETE /dashboards/{id}
+            POST /dashboards/preview      # every metric card, with what each measured
+            POST /dashboards/panel        # one embedded report, dashboard filters applied
+            GET  /dashboards/options      # apps, modules, saved reports, window sizes
+            GET  /dashboards/suggest-date-field?table=
 
 Templates   GET|POST /templates · POST /templates/{id}/instantiate
 
