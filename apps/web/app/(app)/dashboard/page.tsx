@@ -51,7 +51,7 @@ export default function DashboardPage() {
     <>
       <header className="flex h-14 shrink-0 items-center justify-between border-b border-line bg-white px-5">
         <div>
-          <h1 className="text-md font-semibold">Dashboard</h1>
+          <h1 className="text-md font-semibold">Pinned Reports</h1>
           <p className="text-xs text-ink-muted">
             Pinned reports and connected database health
           </p>

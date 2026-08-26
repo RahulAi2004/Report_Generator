@@ -94,7 +94,11 @@ export function Sidebar() {
 
       <div className="flex-1 overflow-y-auto py-2">
         {NAV.map((item) => {
-          const active = pathname.startsWith(item.href);
+          // Matched on a path boundary, not a prefix: /dashboards would
+          // otherwise light up /dashboard as well, and two highlighted rows
+          // say nothing about where you are.
+          const active =
+            pathname === item.href || pathname.startsWith(`${item.href}/`);
           const content = (
             <>
               <span className={clsx(active && 'text-white')}>{item.icon}</span>
