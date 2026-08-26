@@ -16,7 +16,7 @@ from decimal import Decimal
 from typing import Any, Literal
 
 import sqlalchemy as sa
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session as DbSession
@@ -457,6 +457,12 @@ def list_modules(
 
 @router.get("")
 def list_reports(
+    module: str | None = Query(default=None),
+    pinned: bool = Query(default=False),
+    include_hidden: bool = Query(
+        default=False,
+        description="Include reports whose author kept them out of the menu.",
+    ),
     db: DbSession = Depends(get_session),
     principal: Principal = Depends(current_principal),
 ):
@@ -469,12 +475,24 @@ def list_reports(
     if principal.is_admin:
         visible = sa.true()
 
-    rows = db.scalars(
+    statement = (
         sa.select(Report)
         .where(Report.is_archived == False, visible)  # noqa: E712
         .where(sa.or_(Report.is_draft == False, Report.owner_id == principal.id))  # noqa: E712
-        .order_by(Report.updated_at.desc())
-    ).all()
+    )
+
+    # "Show in reports menu" is the author's choice about the listing, so it is
+    # honoured here -- but never hides a report from its own owner.
+    if not include_hidden:
+        statement = statement.where(
+            sa.or_(Report.show_in_menu == True, Report.owner_id == principal.id)  # noqa: E712
+        )
+    if module:
+        statement = statement.where(Report.module == module)
+    if pinned:
+        statement = statement.where(Report.pin_to_dashboard == True)  # noqa: E712
+
+    rows = db.scalars(statement.order_by(Report.updated_at.desc())).all()
     return {
         "reports": [
             {
@@ -489,6 +507,10 @@ def list_reports(
                 "section": report.section,
                 "visibility": report.visibility,
                 "is_draft": report.is_draft,
+                "pin_to_dashboard": report.pin_to_dashboard,
+                "auto_refresh": report.auto_refresh,
+                "show_in_menu": report.show_in_menu,
+                "definition": report.definition if report.pin_to_dashboard else None,
                 "updated_at": report.updated_at.isoformat(),
                 "last_run_at": report.last_run_at.isoformat() if report.last_run_at else None,
                 "run_count": report.run_count,

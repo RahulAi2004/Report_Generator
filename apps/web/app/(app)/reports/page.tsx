@@ -18,7 +18,7 @@ export default function ReportsPage() {
   const router = useRouter();
   const builder = useBuilder();
   const queryClient = useQueryClient();
-  const { data, isLoading } = useQuery({ queryKey: ['reports'], queryFn: api.listReports });
+  const { data, isLoading } = useQuery({ queryKey: ['reports'], queryFn: () => api.listReports() });
 
   const [search, setSearch] = useState('');
   const [renaming, setRenaming] = useState<SavedReportSummary | null>(null);

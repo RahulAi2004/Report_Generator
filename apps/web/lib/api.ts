@@ -196,7 +196,15 @@ export const api = {
     request<{ ok: boolean }>(`/uploads/${id}`, { method: 'DELETE' }),
 
   // -- saved reports ------------------------------------------------------
-  listReports: () => request<{ reports: SavedReportSummary[] }>('/reports'),
+  listReports: (options: { module?: string; pinned?: boolean } = {}) => {
+    const query = new URLSearchParams();
+    if (options.module) query.set('module', options.module);
+    if (options.pinned) query.set('pinned', 'true');
+    const suffix = query.toString();
+    return request<{ reports: SavedReportSummary[] }>(
+      `/reports${suffix ? `?${suffix}` : ''}`,
+    );
+  },
   getReport: (id: string) =>
     request<{ id: string; name: string; definition: ReportDefinition }>(`/reports/${id}`),
   createReport: (name: string, definition: ReportDefinition, description?: string) =>
@@ -230,6 +238,11 @@ export interface SavedReportSummary {
   section?: string | null;
   visibility?: 'private' | 'team' | 'organization';
   is_draft?: boolean;
+  pin_to_dashboard?: boolean;
+  auto_refresh?: boolean;
+  show_in_menu?: boolean;
+  /** Present only for pinned reports, so the dashboard can run them. */
+  definition?: ReportDefinition | null;
   folder: string | null;
   is_template: boolean;
   is_favorite: boolean;
@@ -277,6 +290,8 @@ export interface UploadedDataset {
   created_at: string;
 }
 
+
+export type { PreviewResult };
 
 export interface SaveOptions {
   name: string;

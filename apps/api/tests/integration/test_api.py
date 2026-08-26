@@ -773,3 +773,66 @@ def test_filters_are_dropped_when_the_author_asks(client, admin):
     assert len(loaded["definition"]["columns"]) == len(SIMPLE_REPORT["columns"])
 
     client.delete(f"/api/v1/reports/{created['id']}", headers=admin)
+
+
+def test_pinned_reports_can_be_listed_on_their_own(client, admin):
+    pinned = client.post("/api/v1/reports", headers=admin, json={
+        "name": "Pinned KPI", "definition": SIMPLE_REPORT,
+        "module": "CRM", "section": "Customers",
+        "visibility": "team", "pin_to_dashboard": True,
+    }).json()
+    plain = client.post("/api/v1/reports", headers=admin, json={
+        "name": "Not Pinned", "definition": SIMPLE_REPORT, "visibility": "team",
+    }).json()
+
+    try:
+        body = client.get("/api/v1/reports?pinned=true", headers=admin).json()
+        names = [r["name"] for r in body["reports"]]
+        assert "Pinned KPI" in names
+        assert "Not Pinned" not in names
+
+        # A pinned report carries its definition so the dashboard can run it.
+        card = next(r for r in body["reports"] if r["name"] == "Pinned KPI")
+        assert card["definition"] is not None
+        assert card["definition"]["primary_table"] == "customers"
+    finally:
+        client.delete(f"/api/v1/reports/{pinned['id']}", headers=admin)
+        client.delete(f"/api/v1/reports/{plain['id']}", headers=admin)
+
+
+def test_reports_hidden_from_the_menu_are_not_listed_to_others(client, admin):
+    """'Show in reports menu' has to actually govern the listing."""
+    hidden = client.post("/api/v1/reports", headers=admin, json={
+        "name": "Hidden From Menu", "definition": SIMPLE_REPORT,
+        "visibility": "organization", "show_in_menu": False,
+    }).json()
+    try:
+        analyst = auth(client, ANALYST)
+        names = [r["name"] for r in client.get("/api/v1/reports", headers=analyst).json()["reports"]]
+        assert "Hidden From Menu" not in names
+
+        # The owner still sees it, otherwise it would be unreachable.
+        mine = [r["name"] for r in client.get("/api/v1/reports", headers=admin).json()["reports"]]
+        assert "Hidden From Menu" in mine
+    finally:
+        client.delete(f"/api/v1/reports/{hidden['id']}", headers=admin)
+
+
+def test_reports_can_be_filtered_by_module(client, admin):
+    crm = client.post("/api/v1/reports", headers=admin, json={
+        "name": "CRM Report", "definition": SIMPLE_REPORT,
+        "module": "CRM", "visibility": "team",
+    }).json()
+    sales = client.post("/api/v1/reports", headers=admin, json={
+        "name": "Sales Report", "definition": SIMPLE_REPORT,
+        "module": "Sales", "visibility": "team",
+    }).json()
+    try:
+        names = [
+            r["name"]
+            for r in client.get("/api/v1/reports?module=CRM", headers=admin).json()["reports"]
+        ]
+        assert "CRM Report" in names and "Sales Report" not in names
+    finally:
+        client.delete(f"/api/v1/reports/{crm['id']}", headers=admin)
+        client.delete(f"/api/v1/reports/{sales['id']}", headers=admin)
