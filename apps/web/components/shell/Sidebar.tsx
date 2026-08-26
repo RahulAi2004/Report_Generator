@@ -41,8 +41,14 @@ const icon = (path: React.ReactNode) => (
  */
 const NAV: Item[] = [
   {
+    href: '/dashboards',
+    label: 'Dashboards',
+    ready: true,
+    icon: icon(<><rect x="3" y="3" width="7.5" height="7.5" rx="1.5" /><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.5" /><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.5" /><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.5" /></>),
+  },
+  {
     href: '/dashboard',
-    label: 'Dashboard',
+    label: 'Pinned',
     ready: true,
     icon: icon(<><path d="M3 10.5 12 3l9 7.5" /><path d="M5 9.5V21h14V9.5" /></>),
   },

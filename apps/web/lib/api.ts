@@ -14,6 +14,14 @@ import type {
   SchemaTable,
   ValidationResult,
 } from './types';
+import type {
+  DashboardDefinition,
+  DashboardOptions,
+  DashboardPreview,
+  DashboardSummary,
+  DateField,
+  PanelResult,
+} from './dashboard-types';
 
 const BASE = '/api/v1';
 
@@ -221,6 +229,46 @@ export const api = {
       body: JSON.stringify({ ...options, definition }),
     }),
 
+  // -- dashboards ---------------------------------------------------------
+  /** Every metric card's number, with what each was actually measured over. */
+  dashboardPreview: (definition: DashboardDefinition) =>
+    post<DashboardPreview>('/dashboards/preview', { definition }),
+  dashboardPanel: (
+    definition: DashboardDefinition,
+    panelId: string,
+    page = 1,
+    pageSize = 10,
+  ) =>
+    post<PanelResult>('/dashboards/panel', {
+      definition,
+      panel_id: panelId,
+      page,
+      page_size: pageSize,
+    }),
+  dashboardOptions: () => request<DashboardOptions>('/dashboards/options'),
+  suggestDateField: (table: string) =>
+    request<{ date_field: DateField | null }>(
+      `/dashboards/suggest-date-field?table=${encodeURIComponent(table)}`,
+    ),
+  listDashboards: (app?: string) =>
+    request<{ dashboards: DashboardSummary[] }>(
+      `/dashboards${app ? `?app=${encodeURIComponent(app)}` : ''}`,
+    ),
+  getDashboard: (id: string) =>
+    request<DashboardSummary & { definition: DashboardDefinition }>(`/dashboards/${id}`),
+  createDashboard: (body: DashboardSaveOptions & { definition: DashboardDefinition }) =>
+    post<{ id: string; name: string }>('/dashboards', body),
+  updateDashboard: (
+    id: string,
+    body: DashboardSaveOptions & { definition: DashboardDefinition },
+  ) =>
+    request<{ id: string; name: string }>(`/dashboards/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    }),
+  deleteDashboard: (id: string) =>
+    request<{ ok: boolean }>(`/dashboards/${id}`, { method: 'DELETE' }),
+
   deleteReport: (id: string) =>
     request<{ ok: boolean }>(`/reports/${id}`, { method: 'DELETE' }),
   updateReport: (id: string, name: string, definition: ReportDefinition) =>
@@ -229,6 +277,14 @@ export const api = {
       body: JSON.stringify({ name, definition }),
     }),
 };
+
+export interface DashboardSaveOptions {
+  name: string;
+  description?: string;
+  visibility?: 'private' | 'team' | 'organization';
+  show_in_menu?: boolean;
+  is_default?: boolean;
+}
 
 export interface SavedReportSummary {
   id: string;
