@@ -163,7 +163,9 @@ def column_values(
     from app.domain.report.compiler import _SA_TYPES, LIKE_ESCAPE
 
     source = sa.Table(
-        table_meta.name,
+        # The physical table, not the registry key, which may carry a schema
+        # prefix used only to keep colliding names apart.
+        table_meta.real_name,
         sa.MetaData(),
         sa.Column(column.name, _SA_TYPES[column.data_type]()),
         schema=table_meta.schema if table_meta.schema not in (None, "public") else None,
