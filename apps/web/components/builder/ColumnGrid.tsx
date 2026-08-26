@@ -89,16 +89,16 @@ export function ColumnGrid({
         />
       ) : (
         <div className="overflow-x-auto">
-          <table className="striped w-full min-w-[680px] border-collapse">
+          <table className="striped w-full min-w-[560px] border-collapse">
             <thead>
               <tr className="border-b border-line text-left text-2xs uppercase tracking-wide text-ink-faint">
                 <th className="w-8 px-2 py-2" />
                 <th className="w-8 px-1 py-2 font-medium">#</th>
-                <th className="px-2 py-2 font-medium">Display Name</th>
+                <th className="min-w-[150px] px-2 py-2 font-medium">Display Name</th>
                 <th className="px-2 py-2 font-medium">Source</th>
-                <th className="w-[150px] px-2 py-2 font-medium">Aggregation</th>
-                <th className="w-[92px] px-2 py-2 font-medium">Data Type</th>
-                <th className="w-[72px] px-2 py-2 font-medium">Visible</th>
+                <th className="w-[128px] px-2 py-2 font-medium">Aggregation</th>
+                <th className="w-[80px] px-2 py-2 font-medium">Data Type</th>
+                <th className="w-[56px] px-2 py-2 font-medium">Visible</th>
                 <th className="w-16 px-2 py-2" />
               </tr>
             </thead>

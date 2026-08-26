@@ -1,9 +1,11 @@
 'use client';
 
 import clsx from 'clsx';
+import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
-import { Badge, Checkbox, EmptyState, Select } from '@/components/ui/primitives';
+import { Badge, Checkbox, EmptyState, Select, Skeleton } from '@/components/ui/primitives';
 import { formatValue } from '@/lib/format';
+import { api } from '@/lib/api';
 import { AGGREGATION_LABELS } from '@/store/builder';
 import type { Aggregation, ColumnFormat, ReportColumn, SchemaTable } from '@/lib/types';
 
@@ -185,6 +187,8 @@ export function ColumnInspector({
               label={<span className="text-sm">Visible in Report</span>}
             />
 
+            <SampleValues table={column.table} field={column.field} />
+
             {meta?.is_masked && (
               <p className="rounded border border-warn-border bg-warn-soft px-2 py-1.5 text-2xs text-warn">
                 This field is masked by a data policy. Values are obscured before they leave
@@ -294,6 +298,78 @@ export function ColumnInspector({
         )}
       </div>
     </aside>
+  );
+}
+
+/**
+ * A few of the values this column actually contains.
+ *
+ * Knowing what is in a column decides how it should be aggregated and filtered,
+ * and it is the difference between building a filter that works first time and
+ * one that silently returns nothing.
+ */
+function SampleValues({ table, field }: { table: string; field: string }) {
+  const values = useQuery({
+    queryKey: ['column-values', table, field],
+    queryFn: () => api.columnValues(table, field),
+    staleTime: 120_000,
+  });
+
+  if (values.isLoading) {
+    return (
+      <div>
+        <span className="label">Sample values</span>
+        <Skeleton className="h-8 w-full" />
+      </div>
+    );
+  }
+
+  if (!values.data?.supported) {
+    return (
+      <div>
+        <span className="label">Sample values</span>
+        <p className="rounded border border-line bg-canvas px-2 py-1.5 text-2xs text-ink-faint">
+          {values.data?.reason === 'not a categorical field'
+            ? 'Too many distinct values to list — dates and free text are not sampled.'
+            : 'Values could not be read for this field.'}
+        </p>
+      </div>
+    );
+  }
+
+  const found = values.data.values;
+  return (
+    <div>
+      <span className="label">
+        Sample values
+        <span className="ml-1 font-normal text-ink-faint">
+          {values.data.truncated ? `first ${found.length}` : `${found.length} distinct`}
+        </span>
+      </span>
+
+      {found.length === 0 ? (
+        <p className="rounded border border-line bg-canvas px-2 py-1.5 text-2xs text-ink-faint">
+          This column is empty in every row.
+        </p>
+      ) : (
+        <div className="flex max-h-24 flex-wrap gap-1 overflow-y-auto rounded border border-line bg-canvas p-1.5">
+          {found.slice(0, 24).map((value) => (
+            <span
+              key={value}
+              title={value}
+              className="max-w-full truncate rounded border border-line bg-white px-1.5 py-0.5 font-mono text-2xs text-ink-muted"
+            >
+              {value}
+            </span>
+          ))}
+          {found.length > 24 && (
+            <span className="px-1 py-0.5 text-2xs text-ink-faint">
+              +{found.length - 24} more
+            </span>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 

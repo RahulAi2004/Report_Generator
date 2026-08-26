@@ -62,7 +62,7 @@ export function FieldPanel({
   }
 
   return (
-    <aside className="flex w-[212px] shrink-0 flex-col border-r border-line bg-white">
+    <aside className="flex w-[196px] shrink-0 flex-col border-r border-line bg-white">
       <div className="px-3 pb-2 pt-3">
         <h2 className="panel-title mb-2 truncate">
           {table ? `Fields — ${table.label}` : 'Fields'}

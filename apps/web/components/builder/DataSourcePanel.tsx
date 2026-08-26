@@ -54,7 +54,7 @@ export function DataSourcePanel({
   }, [categories, search]);
 
   return (
-    <aside className="flex w-[224px] shrink-0 flex-col border-r border-line bg-white">
+    <aside className="flex w-[200px] shrink-0 flex-col border-r border-line bg-white">
       <div className="px-3 pb-2 pt-3">
         <h2 className="panel-title mb-2">Data Sources</h2>
         <div className="relative">

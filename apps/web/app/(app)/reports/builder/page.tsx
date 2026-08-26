@@ -452,6 +452,7 @@ export default function BuilderPage() {
             validation={validation}
             primaryTable={definition.primary_table}
             labels={labels}
+            tables={tables}
             onEditRelationships={() => setJoinsOpen(true)}
           />
 
