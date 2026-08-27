@@ -182,6 +182,12 @@ class CountRequest(BaseModel):
 #: Counting is a full pass over the report's data. The board would otherwise
 #: repeat that on every navigation, against an operational database that has
 #: other work to do.
+#:
+#: In-process, so each worker warms its own: with N workers a count is repeated
+#: at most N times per window rather than once. That is deliberate. A shared
+#: cache means Redis, and a cache whose unavailability can fail a request is a
+#: worse trade than counting twice -- measured at well under a second for the
+#: whole board.
 _COUNT_CACHE: dict[str, tuple[float, dict]] = {}
 _COUNT_TTL = 300.0
 
