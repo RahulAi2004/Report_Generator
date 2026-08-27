@@ -87,7 +87,34 @@ def _engine(url: str) -> Engine:
     )
 
 
-def probe(url: str) -> ProbeResult:
+def unreachable_because_off_network(host: str) -> bool:
+    """
+    Whether this host name only resolved because of the container's search domain.
+
+    Docker gives containers `search localhost` with `ndots:0`, so a name that is
+    not on any of our networks does not fail to resolve -- it silently becomes
+    `<name>.localhost`, which is 127.0.0.1. The connection then gets refused,
+    and "nothing is listening on that port" is exactly the wrong thing to tell
+    someone whose real problem is that the database is on another network.
+    """
+    import ipaddress
+    import socket
+
+    lowered = host.strip().lower()
+    if lowered in ("localhost", "127.0.0.1", "::1", ""):
+        return False  # they meant loopback, so loopback is not a surprise
+
+    try:
+        resolved = {info[4][0] for info in socket.getaddrinfo(host, None)}
+    except socket.gaierror:
+        return False  # it did not resolve at all, which _explain already covers
+
+    return bool(resolved) and all(
+        ipaddress.ip_address(address).is_loopback for address in resolved
+    )
+
+
+def probe(url: str, host: str | None = None) -> ProbeResult:
     """
     Connect, find out what is there, and establish whether we can write.
 
@@ -130,6 +157,13 @@ def probe(url: str) -> ProbeResult:
     except SQLAlchemyError as error:
         if not result.reachable:
             result.detail = _explain(error)
+            if host and unreachable_because_off_network(host):
+                result.detail = (
+                    f"'{host}' is not reachable from this application. The name "
+                    "resolved to this container itself, which means that database "
+                    "is on a different Docker network. Its container has to share "
+                    "a network with this one before it can be connected."
+                )
         else:
             result.read_only = False
             result.detail = _explain(error)

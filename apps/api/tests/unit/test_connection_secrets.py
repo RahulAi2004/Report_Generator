@@ -131,3 +131,31 @@ def test_a_bad_host_name_says_what_to_check():
     ))
     assert result.reachable is False
     assert result.detail
+
+
+# ---------------------------------------------------------------------------
+# Off-network hosts
+# ---------------------------------------------------------------------------
+def test_loopback_is_not_treated_as_a_surprise():
+    """
+    Someone who typed localhost meant localhost. Telling them their database is
+    on the wrong Docker network would be nonsense.
+    """
+    assert not connections.unreachable_because_off_network("localhost")
+    assert not connections.unreachable_because_off_network("127.0.0.1")
+    assert not connections.unreachable_because_off_network("::1")
+    assert not connections.unreachable_because_off_network("")
+
+
+def test_a_name_that_does_not_resolve_at_all_is_left_to_the_ordinary_message():
+    """
+    That case already has a good message. This diagnostic is only for the
+    confusing one, where a name resolves to somewhere useless.
+    """
+    assert not connections.unreachable_because_off_network(
+        "definitely-no-such-host-anywhere.invalid"
+    )
+
+
+def test_a_real_host_is_not_flagged():
+    assert not connections.unreachable_because_off_network("example.com")

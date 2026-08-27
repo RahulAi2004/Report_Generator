@@ -111,7 +111,7 @@ def test_connection(
         host=payload.host, port=payload.port, database=payload.database_name,
         username=payload.username, password=payload.password, ssl_mode=payload.ssl_mode,
     )
-    result = connections.probe(url)
+    result = connections.probe(url, host=payload.host)
     write_audit(
         db, principal, "connection_tested",
         success=result.reachable,
@@ -147,7 +147,7 @@ def create_connection(
         host=payload.host, port=payload.port, database=payload.database_name,
         username=payload.username, password=payload.password, ssl_mode=payload.ssl_mode,
     )
-    result = connections.probe(url)
+    result = connections.probe(url, host=payload.host)
 
     if not result.reachable:
         raise HTTPException(status_code=400, detail=result.detail)
@@ -216,10 +216,13 @@ def update_connection(
             raise HTTPException(status_code=400, detail=str(error)) from error
         secret = connection.password_encrypted
 
-    result = connections.probe(connections.build_url(
-        host=payload.host, port=payload.port, database=payload.database_name,
-        username=payload.username, password=password, ssl_mode=payload.ssl_mode,
-    ))
+    result = connections.probe(
+        connections.build_url(
+            host=payload.host, port=payload.port, database=payload.database_name,
+            username=payload.username, password=password, ssl_mode=payload.ssl_mode,
+        ),
+        host=payload.host,
+    )
     if not result.reachable:
         raise HTTPException(status_code=400, detail=result.detail)
     if not result.read_only:
@@ -265,7 +268,7 @@ def activate(
         except SecretUnavailable as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
 
-        result = connections.probe(url)
+        result = connections.probe(url, host=payload.host)
         if not result.reachable:
             raise HTTPException(
                 status_code=400,
