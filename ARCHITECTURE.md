@@ -229,6 +229,16 @@ Even a total application compromise cannot write. **Startup self-test:** the app
 
 ---
 
+### D.x Credential columns are excluded in code, not by configuration
+
+Column sensitivity is otherwise an administrator's decision: which columns are sensitive, who may see them, whether they are masked. Credentials are the exception. A password hash, a session token or an API key has no reporting use at all, and one in a downloaded spreadsheet cannot be taken back — so `CREDENTIAL_COLUMNS` is applied in `SchemaRegistry.for_principal()` before any configuration is consulted, and there is no setting that turns it back on.
+
+Excluded rather than masked: a masked hash still appears in the field list, still confirms the account exists, and still invites someone to add it to a report.
+
+Matched on the whole column name, so `password_changed_at` remains reportable. Over-matching has a cost too — it silently removes data people have real reasons to report on.
+
+---
+
 ## E. Report Engine Design — How Visual Configuration Becomes Validated SQL
 
 Six stages. Each is independently unit-testable and none of them concatenates SQL.
