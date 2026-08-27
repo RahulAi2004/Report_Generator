@@ -19,7 +19,7 @@ from fastapi.responses import JSONResponse
 
 from app.adapters.base import ReadOnlyViolation
 from app.adapters.factory import get_adapter
-from app.api.v1 import auth, dashboards, reports, schema, uploads
+from app.api.v1 import auth, board, dashboards, reports, schema, uploads
 from app.core.config import settings
 from app.core.db import DEV_ACCOUNTS, DEV_PASSWORD, init_database
 from app.domain.report.diagnostics import ReportCompilationError
@@ -105,7 +105,7 @@ async def handle_unexpected(request: Request, error: Exception):
 
 
 for router in (auth.router, schema.router, reports.router, uploads.router,
-               dashboards.router):
+               dashboards.router, board.router):
     app.include_router(router, prefix=settings.api_v1_prefix)
 
 

@@ -53,6 +53,12 @@ const NAV: Item[] = [
     icon: icon(<><path d="M3 10.5 12 3l9 7.5" /><path d="M5 9.5V21h14V9.5" /></>),
   },
   {
+    href: '/report-board',
+    label: 'Report Board',
+    ready: true,
+    icon: icon(<><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M3 9h18M9 9v11" /><path d="M12 13h6M12 16h4" /></>),
+  },
+  {
     href: '/reports',
     label: 'Reports',
     ready: true,

@@ -14,6 +14,7 @@ import type {
   SchemaTable,
   ValidationResult,
 } from './types';
+import type { BoardCount, BoardListing } from './board-types';
 import type {
   DashboardDefinition,
   DashboardOptions,
@@ -228,6 +229,24 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ ...options, definition }),
     }),
+
+  // -- report board -------------------------------------------------------
+  board: (options: { module?: string; section?: string; search?: string } = {}) => {
+    const query = new URLSearchParams();
+    if (options.module) query.set('module', options.module);
+    if (options.section) query.set('section', options.section);
+    if (options.search) query.set('search', options.search);
+    const suffix = query.toString();
+    return request<BoardListing>(`/board/reports${suffix ? `?${suffix}` : ''}`);
+  },
+  /** Record counts for the rows on screen, in one request. */
+  boardCounts: (reportIds: string[], refresh = false) =>
+    post<{ counts: Record<string, BoardCount> }>('/board/counts', {
+      report_ids: reportIds,
+      refresh,
+    }),
+  duplicateReport: (id: string) =>
+    post<{ id: string; name: string }>(`/board/reports/${id}/duplicate`, {}),
 
   // -- dashboards ---------------------------------------------------------
   /** Every metric card's number, with what each was actually measured over. */
