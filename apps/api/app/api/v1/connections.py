@@ -268,7 +268,7 @@ def activate(
         except SecretUnavailable as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
 
-        result = connections.probe(url, host=payload.host)
+        result = connections.probe(url, host=connection.host)
         if not result.reachable:
             raise HTTPException(
                 status_code=400,
