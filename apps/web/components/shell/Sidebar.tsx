@@ -71,6 +71,12 @@ const NAV: Item[] = [
     icon: icon(<><path d="M12 16V4M7 9l5-5 5 5" /><path d="M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" /></>),
   },
   {
+    href: '/connections',
+    label: 'Connections',
+    ready: true,
+    icon: icon(<><rect x="2.5" y="4" width="8" height="6.5" rx="1.5" /><rect x="13.5" y="13.5" width="8" height="6.5" rx="1.5" /><path d="M6.5 10.5v4a2 2 0 0 0 2 2h5" /></>),
+  },
+  {
     href: '/data-sources',
     label: 'Data Sources',
     ready: true,

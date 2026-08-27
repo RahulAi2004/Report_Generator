@@ -156,7 +156,7 @@ def column_values(
         return {"values": cached[1], "supported": True, "cached": True}
 
     table_meta = registry.table(table_name)
-    adapter = get_adapter()
+    adapter = schema_service.adapter_for(db)
 
     import sqlalchemy as sa
 
@@ -356,7 +356,7 @@ def overview(
     """Headline numbers for the Data Sources landing page."""
     registry = schema_service.build_registry(db, principal)
     tables = registry.tables
-    adapter = get_adapter()
+    adapter = schema_service.adapter_for(db)
     return {
         # Which database these tables actually came from. Shown to signed-in
         # users so nobody builds a report against the wrong source. The host and

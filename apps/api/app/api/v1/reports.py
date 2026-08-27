@@ -71,7 +71,7 @@ def _engine(
     db: DbSession, principal: Principal, definition: ReportDefinition | None = None
 ) -> ReportEngine:
     registry = schema_service.build_registry(db, principal)
-    adapter = get_adapter()
+    adapter = schema_service.adapter_for(db)
 
     # A report that mixes uploaded files with database tables is executed
     # against staged temporary tables, which are resolved through search_path
@@ -96,7 +96,7 @@ def _engine(
 def _run(db: DbSession, principal: Principal, engine: ReportEngine, compiled, max_rows: int):
     """Execute wherever the report's sources live."""
     return hybrid_executor.execute(
-        compiled, engine.registry, get_adapter(), max_rows=max_rows
+        compiled, engine.registry, schema_service.adapter_for(db), max_rows=max_rows
     )
 
 
@@ -186,7 +186,7 @@ def preview(
             "rows": [],
         }
 
-    adapter = get_adapter()
+    adapter = schema_service.adapter_for(db)
     started = time.perf_counter()
     try:
         outcome = _run(db, principal, engine, result.compiled, payload.page_size)
@@ -284,7 +284,7 @@ def total_rows(
     if not result.ok:
         raise HTTPException(status_code=400, detail="This report is not valid yet.")
 
-    adapter = get_adapter()
+    adapter = schema_service.adapter_for(db)
     inner = result.compiled.statement.limit(None).offset(None).order_by(None)
     counter = sa.select(sa.func.count()).select_from(inner.subquery("counted"))
 
@@ -331,7 +331,7 @@ def export_report(
             detail="This report cannot be exported until the issues shown are resolved.",
         )
 
-    adapter = get_adapter()
+    adapter = schema_service.adapter_for(db)
     columns = result.compiled.output_columns
     headers = [column.display_name for column in columns]
     safe_name = re.sub(r"[^A-Za-z0-9_-]+", "_", payload.report_name).strip("_") or "report"

@@ -16,6 +16,12 @@ import type {
 } from './types';
 import type { BoardCount, BoardListing } from './board-types';
 import type {
+  Connection,
+  ConnectionInput,
+  ConnectionListing,
+  ProbeResult,
+} from './connection-types';
+import type {
   DashboardDefinition,
   DashboardOptions,
   DashboardPreview,
@@ -229,6 +235,25 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ ...options, definition }),
     }),
+
+  // -- connections --------------------------------------------------------
+  connections: () => request<ConnectionListing>('/connections'),
+  /** Try credentials without saving, and find out what is on the other side. */
+  testConnection: (body: {
+    host: string; port: number; database_name: string;
+    username: string; password: string; ssl_mode: string;
+  }) => post<ProbeResult>('/connections/test', body),
+  createConnection: (body: ConnectionInput) =>
+    post<{ id: string; name: string; probe: ProbeResult }>('/connections', body),
+  updateConnection: (id: string, body: ConnectionInput) =>
+    request<{ id: string; name: string; probe: ProbeResult }>(`/connections/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    }),
+  activateConnection: (id: string) =>
+    post<{ active_id: string }>(`/connections/${id}/activate`, {}),
+  deleteConnection: (id: string) =>
+    request<{ ok: boolean }>(`/connections/${id}`, { method: 'DELETE' }),
 
   // -- report board -------------------------------------------------------
   board: (options: { module?: string; section?: string; search?: string } = {}) => {

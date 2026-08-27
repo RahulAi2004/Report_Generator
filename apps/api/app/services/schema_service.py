@@ -39,23 +39,60 @@ from app.models.metadata_models import (
 )
 
 _lock = threading.Lock()
-_snapshot: SchemaSnapshot | None = None
+#: One snapshot per connection. Switching back to a database already scanned
+#: should not mean scanning it again.
+_snapshots: dict[str, SchemaSnapshot] = {}
 _scanned_at: float = 0.0
 DEFAULT_CONNECTION_ID = "default"
 
 
-def get_snapshot(refresh: bool = False) -> SchemaSnapshot:
-    global _snapshot, _scanned_at
+def adapter_for(session: Session | None = None) -> DatabaseAdapter:
+    """
+    The adapter for whichever connection is live.
+
+    Resolved from the database on every call rather than held in a module
+    variable: the application runs several workers, and a connection switched in
+    one of them has to be seen by all of them. The engine itself is still cached
+    per connection, so this costs one indexed lookup, not a new pool.
+    """
+    if session is None:
+        return get_adapter()
+
+    from app.services import connection_service
+
+    connection_id = connection_service.active_connection_id(session)
+    if connection_id == connection_service.BUILTIN_ID:
+        return get_adapter()
+    return get_adapter(
+        connection_service.connection_url(session, connection_id),
+        cache_key=connection_id,
+    )
+
+
+def get_snapshot(refresh: bool = False, session: Session | None = None) -> SchemaSnapshot:
+    global _scanned_at
+    key = DEFAULT_CONNECTION_ID
+    if session is not None:
+        from app.services import connection_service
+
+        key = connection_service.active_connection_id(session)
+
     with _lock:
-        if _snapshot is None or refresh:
-            adapter: DatabaseAdapter = get_adapter()
-            _snapshot = adapter.introspect()
+        if refresh or key not in _snapshots:
+            adapter: DatabaseAdapter = adapter_for(session)
+            _snapshots[key] = adapter.introspect()
             _scanned_at = time.time()
-        return _snapshot
+        return _snapshots[key]
 
 
 def last_scanned_at() -> float:
     return _scanned_at
+
+
+def forget_snapshots() -> None:
+    """Drop every cached snapshot, after a connection's details change."""
+    with _lock:
+        _snapshots.clear()
 
 
 def build_registry(
@@ -65,7 +102,7 @@ def build_registry(
     refresh: bool = False,
 ) -> SchemaRegistry:
     """Physical snapshot + admin overrides + logical relationships, then RBAC."""
-    snapshot = get_snapshot(refresh=refresh)
+    snapshot = get_snapshot(refresh=refresh, session=session)
 
     table_overrides = {
         row.physical_name: row

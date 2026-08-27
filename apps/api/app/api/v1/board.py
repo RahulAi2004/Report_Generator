@@ -24,13 +24,12 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session as DbSession
 
 from app.adapters.base import QueryExecutionError
-from app.adapters.factory import get_adapter
 from app.core.db import get_session
 from app.core.deps import current_principal, require, write_audit
 from app.core.security import Permission, Principal
 from app.domain.report.ir import ReportDefinition
 from app.models.metadata_models import Dashboard, Report, ReportRun, User
-from app.services import hybrid_executor
+from app.services import hybrid_executor, schema_service
 
 from app.api.v1.reports import _as_compiled, _engine
 
@@ -233,7 +232,8 @@ def _count_report(
 
     try:
         outcome = hybrid_executor.execute(
-            _as_compiled(counter, result.compiled), engine.registry, get_adapter(), max_rows=1
+            _as_compiled(counter, result.compiled), engine.registry,
+            schema_service.adapter_for(db), max_rows=1
         )
     except QueryExecutionError as error:
         # Not being able to count is not a reason to fail the row.
