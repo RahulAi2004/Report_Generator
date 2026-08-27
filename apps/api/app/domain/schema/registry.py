@@ -102,6 +102,34 @@ class MaskPolicy(StrEnum):
     NULL = "null"
 
 
+#: Columns no report may return, whatever anyone configures.
+#:
+#: Everything else about what a report may read is a policy decision left to an
+#: administrator -- which columns are sensitive, who may see them, whether they
+#: are masked. These are not. A password hash, a session token or an API key has
+#: no reporting use at all, and the cost of one appearing in an exported
+#: spreadsheet is not recoverable. So they are excluded in code, before any
+#: configuration is consulted, and there is no setting that turns them back on.
+#:
+#: Matched on the column name against the whole name or a word inside it, so
+#: `password`, `password_hash` and `reset_password_token` are all caught while
+#: `password_changed_at` -- a date, and legitimately reportable -- is not.
+CREDENTIAL_COLUMNS: frozenset[str] = frozenset({
+    "password", "passwd", "pwd", "password_hash", "password_digest",
+    "hashed_password", "encrypted_password", "salt", "password_salt",
+    "token", "token_hash", "access_token", "refresh_token", "refresh_token_hash",
+    "session_token", "api_key", "api_secret", "apikey", "secret", "secret_key",
+    "private_key", "client_secret", "otp", "otp_hash", "two_factor_secret",
+    "totp_secret", "mfa_secret", "recovery_code", "reset_token",
+    "verification_token", "signing_key", "webhook_secret",
+})
+
+
+def is_credential(column_name: str) -> bool:
+    """Whether a column holds a credential and must never reach a report."""
+    return column_name.strip().lower() in CREDENTIAL_COLUMNS
+
+
 @dataclass(frozen=True, slots=True)
 class ColumnMeta:
     table: str
@@ -335,6 +363,9 @@ class SchemaRegistry:
             blocked = denied_columns.get(table.name.lower(), set())
             columns = []
             for column in table.columns:
+                # Checked first, and not overridable: see CREDENTIAL_COLUMNS.
+                if is_credential(column.name):
+                    continue
                 if column.name.lower() in blocked or not column.enabled_for_reporting:
                     continue
                 policy = mask_policies.get(column.qualified.lower())
