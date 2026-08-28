@@ -107,3 +107,41 @@ def test_configuration_cannot_turn_a_credential_back_on(registry):
 
     scoped = registry.for_principal(allowed_tables={"users"})
     assert scoped.column("users", "password") is None
+
+
+# ---------------------------------------------------------------------------
+# Type inference: the boolean/number ambiguity
+# ---------------------------------------------------------------------------
+def test_a_column_of_only_zero_and_one_is_a_number_not_a_boolean():
+    """
+    Found on real Meta data: `clicks` was 0 on every row of a quiet campaign and
+    came back as a boolean, so it could not be summed. The two readings are not
+    equally costly -- calling a flag an integer loses nothing, since `= 1` still
+    filters it, while calling a count a boolean destroys SUM and AVG.
+    """
+    from app.domain.schema.registry import DataType
+    from app.domain.uploads.parser import infer_type
+
+    assert infer_type(["0", "0", "0"]) is DataType.INTEGER
+    assert infer_type(["0", "1", "1", "0"]) is DataType.INTEGER
+    assert infer_type(["1"]) is DataType.INTEGER
+
+
+def test_a_real_boolean_column_is_still_a_boolean():
+    from app.domain.schema.registry import DataType
+    from app.domain.uploads.parser import infer_type
+
+    assert infer_type(["true", "false", "true"]) is DataType.BOOLEAN
+    assert infer_type(["yes", "no"]) is DataType.BOOLEAN
+    assert infer_type(["Y", "N", "Y"]) is DataType.BOOLEAN
+    # Mixed words and digits: the words settle it.
+    assert infer_type(["true", "1", "0", "false"]) is DataType.BOOLEAN
+
+
+def test_ordinary_numbers_and_text_are_unaffected():
+    from app.domain.schema.registry import DataType
+    from app.domain.uploads.parser import infer_type
+
+    assert infer_type(["120", "4000", "9"]) is DataType.INTEGER
+    assert infer_type(["12.50", "0.75"]) is DataType.DECIMAL
+    assert infer_type(["120", "N/A"]) is DataType.TEXT

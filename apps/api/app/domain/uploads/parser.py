@@ -32,6 +32,13 @@ MAX_ROWS = 500_000
 _TRUE = {"true", "yes", "y", "1", "t"}
 _FALSE = {"false", "no", "n", "0", "f"}
 
+#: The boolean words that are not also numbers. A column of nothing but 0 and 1
+#: is ambiguous, and the two readings are not equally costly: calling a flag an
+#: integer loses nothing -- `= 1` still filters it -- while calling a count a
+#: boolean destroys SUM and AVG on it. So a column only counts as boolean when
+#: something in it could not be a number.
+_BOOLEAN_WORDS = (_TRUE | _FALSE) - {"0", "1"}
+
 _DATE_FORMATS = ("%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%d-%m-%Y", "%d %b %Y", "%d %B %Y")
 _DATETIME_FORMATS = (
     "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M",
@@ -165,7 +172,9 @@ def infer_type(values: list[str]) -> DataType:
         # Identifying these matters: a spreadsheet of order ids is only useful
         # if it can be joined to the orders it refers to.
         return DataType.UUID
-    if all(v.lower() in _TRUE | _FALSE for v in lowered):
+    if all(v.lower() in _TRUE | _FALSE for v in lowered) and any(
+        v.lower() in _BOOLEAN_WORDS for v in lowered
+    ):
         return DataType.BOOLEAN
     if all(_as_int(v) is not None for v in lowered):
         return DataType.INTEGER
