@@ -178,6 +178,20 @@ def build_registry(
 
         logging.getLogger(__name__).warning("Could not list uploads", exc_info=True)
 
+    # Tables synced from external APIs, on the same terms as uploads: ordinary
+    # TableMeta entries, so nothing in the report path knows an API exists.
+    from app.services import connector_service
+
+    try:
+        for dataset, provider in connector_service.load_datasets(session):
+            tables.append(connector_service.as_table_meta(dataset, provider))
+    except Exception:
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "Could not list connector datasets", exc_info=True
+        )
+
     registry = SchemaRegistry(tables, relationships, connection_id)
     if principal is None:
         return registry

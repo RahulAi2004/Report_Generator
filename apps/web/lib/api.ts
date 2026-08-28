@@ -16,6 +16,12 @@ import type {
 } from './types';
 import type { BoardCount, BoardListing } from './board-types';
 import type {
+  Connector,
+  ConnectorDataset,
+  Discovery,
+  Provider,
+} from './connector-types';
+import type {
   Connection,
   ConnectionInput,
   ConnectionListing,
@@ -235,6 +241,48 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ ...options, definition }),
     }),
+
+  // -- API connectors -----------------------------------------------------
+  connectorProviders: () => request<{ providers: Provider[] }>('/connectors/providers'),
+  /** Ask the provider what a credential can reach, without storing it. */
+  discoverConnector: (body: { provider: string; token: string; api_version?: string }) =>
+    post<Discovery>('/connectors/discover', body),
+  connectors: () =>
+    request<{ connectors: Connector[]; can_store_tokens: boolean }>('/connectors'),
+  createConnector: (body: {
+    provider: string; name: string; token: string;
+    api_version?: string; sync_interval_minutes?: number;
+  }) => post<{ id: string; name: string; discovery: Discovery }>('/connectors', body),
+  refreshDiscovery: (id: string) =>
+    post<Discovery>(`/connectors/${id}/refresh-discovery`, {}),
+  updateConnector: (id: string, body: Record<string, unknown>) =>
+    request<{ id: string; name: string }>(`/connectors/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    }),
+  deleteConnector: (id: string) =>
+    request<{ ok: boolean }>(`/connectors/${id}`, { method: 'DELETE' }),
+
+  addConnectorDataset: (
+    connectorId: string,
+    body: {
+      dataset_key: string; resource_id: string;
+      resource_name?: string; display_name?: string; lookback_days?: number;
+    },
+  ) => post<ConnectorDataset>(`/connectors/${connectorId}/datasets`, body),
+  syncDataset: (id: string) =>
+    post<{ ok: boolean; already_running: boolean }>(`/connectors/datasets/${id}/sync`, {}),
+  updateDataset: (id: string, body: Record<string, unknown>) =>
+    request<ConnectorDataset>(`/connectors/datasets/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    }),
+  deleteDataset: (id: string) =>
+    request<{ ok: boolean }>(`/connectors/datasets/${id}`, { method: 'DELETE' }),
+  previewDataset: (id: string) =>
+    request<{ columns: string[]; rows: (string | null)[][]; status: string }>(
+      `/connectors/datasets/${id}/preview`,
+    ),
 
   // -- connections --------------------------------------------------------
   connections: () => request<ConnectionListing>('/connections'),

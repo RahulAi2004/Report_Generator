@@ -19,8 +19,8 @@ from fastapi.responses import JSONResponse
 
 from app.adapters.base import ReadOnlyViolation
 from app.adapters.factory import get_adapter
-from app.api.v1 import (auth, board, connections, dashboards, reports,
-                        schema, uploads)
+from app.api.v1 import (auth, board, connections, connectors, dashboards,
+                        reports, schema, uploads)
 from app.core.config import settings
 from app.core.db import DEV_ACCOUNTS, DEV_PASSWORD, init_database
 from app.domain.report.diagnostics import ReportCompilationError
@@ -59,7 +59,21 @@ async def lifespan(app: FastAPI):
         )
         logger.info("Demo sign-in: %s / %s", DEV_ACCOUNTS[0][0], DEV_PASSWORD)
 
-    yield
+    # Connector datasets refresh on a timer. Started here so it lives and dies
+    # with the application, and stopped cleanly so a shutdown does not leave a
+    # sync half-written.
+    import asyncio
+
+    from app.services import connector_scheduler
+
+    stop_refreshing = asyncio.Event()
+    refresher = asyncio.create_task(connector_scheduler.run(stop_refreshing))
+
+    try:
+        yield
+    finally:
+        stop_refreshing.set()
+        refresher.cancel()
 
 
 app = FastAPI(
@@ -106,7 +120,8 @@ async def handle_unexpected(request: Request, error: Exception):
 
 
 for router in (auth.router, schema.router, reports.router, uploads.router,
-               dashboards.router, board.router, connections.router):
+               dashboards.router, board.router, connections.router,
+               connectors.router):
     app.include_router(router, prefix=settings.api_v1_prefix)
 
 

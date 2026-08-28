@@ -286,6 +286,74 @@ class UploadedDataset(Base):
 # ---------------------------------------------------------------------------
 # Audit and query history (spec 34, 35)
 # ---------------------------------------------------------------------------
+class ApiConnector(Base):
+    """
+    A credential for somebody else's API.
+
+    The rows it produces live in ordinary tables, exactly like an uploaded
+    spreadsheet, because the report engine compiles SQL and cannot query HTTP.
+    This record is only the credential and the settings around it.
+    """
+
+    __tablename__ = "api_connectors"
+
+    id: Mapped[str] = mapped_column(sa.String(32), primary_key=True, default=new_id)
+    provider: Mapped[str] = mapped_column(sa.String(40), index=True)
+    name: Mapped[str] = mapped_column(sa.String(120))
+    #: AES-GCM ciphertext. Never returned by any API, never logged.
+    token_encrypted: Mapped[bytes | None] = mapped_column(sa.LargeBinary, nullable=True)
+    #: The provider's API version. Versions are retired on a schedule, so this
+    #: has to be changeable without a deployment.
+    api_version: Mapped[str] = mapped_column(sa.String(20), default="")
+    #: What discovery last found this credential could reach.
+    discovery: Mapped[dict | None] = mapped_column(sa.JSON, nullable=True)
+    is_active: Mapped[bool] = mapped_column(sa.Boolean, default=True)
+    #: How often its datasets are refreshed, in minutes.
+    sync_interval_minutes: Mapped[int] = mapped_column(sa.Integer, default=60)
+    last_checked_at: Mapped[datetime | None] = mapped_column(sa.DateTime, nullable=True)
+    last_error: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+    created_by: Mapped[str | None] = mapped_column(sa.String(32), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(sa.DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(sa.DateTime, default=utcnow, onupdate=utcnow)
+
+
+class ConnectorDataset(Base):
+    """
+    One table produced by a connector.
+
+    The catalogue entry: which dataset of which resource, what columns it turned
+    out to have, and when it was last refreshed. The rows themselves are in
+    `physical_table`, in the connectors schema.
+    """
+
+    __tablename__ = "connector_datasets"
+
+    id: Mapped[str] = mapped_column(sa.String(32), primary_key=True, default=new_id)
+    connector_id: Mapped[str] = mapped_column(
+        sa.String(32), sa.ForeignKey("api_connectors.id"), index=True
+    )
+    #: Which dataset the provider offers, e.g. "ads_insights".
+    dataset_key: Mapped[str] = mapped_column(sa.String(60))
+    #: Which of the provider's resources it reads -- an ad account, a page.
+    resource_id: Mapped[str] = mapped_column(sa.String(120))
+    resource_name: Mapped[str] = mapped_column(sa.String(190), default="")
+    #: The name it appears under in the report builder.
+    display_name: Mapped[str] = mapped_column(sa.String(190))
+    physical_table: Mapped[str] = mapped_column(sa.String(80), default="")
+    #: [{name, label, data_type, nullable}] -- discovered from what arrived.
+    columns: Mapped[list] = mapped_column(sa.JSON, default=list)
+    row_count: Mapped[int] = mapped_column(sa.Integer, default=0)
+    #: How many days back a time series is fetched on each sync.
+    lookback_days: Mapped[int] = mapped_column(sa.Integer, default=30)
+    is_enabled: Mapped[bool] = mapped_column(sa.Boolean, default=True)
+    #: pending | syncing | ready | error
+    status: Mapped[str] = mapped_column(sa.String(20), default="pending")
+    last_error: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+    last_synced_at: Mapped[datetime | None] = mapped_column(sa.DateTime, nullable=True)
+    last_duration_ms: Mapped[int] = mapped_column(sa.Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(sa.DateTime, default=utcnow)
+
+
 class AuditLog(Base):
     """
     Append-only. The application role holds no UPDATE or DELETE grant on this
