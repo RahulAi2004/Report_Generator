@@ -341,27 +341,40 @@ function DiscoveryPanel({ found }: { found: Discovery }) {
         Connected as {found.account_name ?? 'an unnamed account'} — {found.detail}
       </p>
 
-      {found.exchanged_for_long_lived && (
-        <p className="mt-1 text-2xs text-good">
-          Exchanged for a long-lived token — the stored one lasts about sixty days,
-          not the hour or two the pasted one had.
-        </p>
-      )}
-      {!found.has_app_credentials && (
+      {/*
+        One sentence about the token's life, not two. Saying "exchanged for a
+        sixty-day token" and "does not expire" on consecutive lines is a
+        contradiction the reader has to resolve, and the whole point of this
+        panel is that they should not have to work anything out.
+      */}
+      <p
+        className={clsx(
+          'mt-1 text-2xs',
+          soon ? 'text-warn' : found.exchanged_for_long_lived ? 'text-good' : 'text-ink-muted',
+        )}
+      >
+        {expiring
+          ? found.exchanged_for_long_lived
+            ? `Exchanged for a long-lived token, valid until ${expiring.toLocaleDateString()}.`
+            : `This token expires ${expiring.toLocaleDateString()}.`
+          : found.exchanged_for_long_lived
+            ? 'Exchanged for a long-lived token, and Meta reports no expiry on it.'
+            : 'Meta reports no expiry on this token.'}
+        {soon && ' Syncing will stop then unless it is replaced.'}
+      </p>
+
+      {!found.has_app_credentials && !found.expires_at && (
         <p className="mt-1 text-2xs text-warn">
-          No App ID and Secret given, so the token is stored exactly as pasted. If it
-          came from the Graph API Explorer it will stop working within a couple of
-          hours.
+          No App ID and Secret were given, so the token is stored exactly as pasted.
+          Meta reports no expiry, but a token from the Graph API Explorer usually has
+          one it does not declare here.
         </p>
       )}
-      {expiring && (
-        <p className={clsx('mt-1 text-2xs', soon ? 'text-warn' : 'text-ink-muted')}>
-          This token expires {expiring.toLocaleDateString()}
-          {soon && ' — generate a long-lived one, or syncing will stop then.'}
+      {!found.has_app_credentials && found.expires_at && (
+        <p className="mt-1 text-2xs text-warn">
+          Stored exactly as pasted. Adding the App ID and Secret would let it be
+          exchanged for a longer-lived one.
         </p>
-      )}
-      {!found.expires_at && (
-        <p className="mt-1 text-2xs text-ink-muted">This token does not expire.</p>
       )}
 
       {found.permissions.length > 0 && (
