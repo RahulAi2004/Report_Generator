@@ -336,3 +336,83 @@ def test_a_missing_appsecret_proof_says_exactly_what_to_add():
     }))
     assert "App Secret" in str(error)
     assert "App ID" in str(error)
+
+
+# ---------------------------------------------------------------------------
+# Page-scoped tokens
+# ---------------------------------------------------------------------------
+def test_page_endpoints_use_the_page_s_own_token(monkeypatch):
+    """
+    Facebook Page endpoints refuse a user token with "Invalid OAuth 2.0 Access
+    Token" and nothing that explains why. The Page issues its own, and that is
+    what its requests have to carry.
+    """
+    connector = MetaConnector("user-token")
+    seen: list[tuple[str, str | None]] = []
+
+    def fake_get(path, params=None, authenticate=True, token=None):
+        seen.append((path, token))
+        if path == "PAGE1":
+            return {"access_token": "the-page-token"}
+        return {"data": [{"id": "post1", "message": "hello"}]}
+
+    monkeypatch.setattr(connector, "_get", fake_get)
+    page = connector.fetch("page_posts", "PAGE1", None, None, None)
+
+    assert page.rows == [{"id": "post1", "message": "hello"}]
+    assert ("PAGE1", None) in seen              # asked for the page token
+    assert ("PAGE1/posts", "the-page-token") in seen  # used it
+
+
+def test_the_page_token_is_fetched_once_per_client(monkeypatch):
+    """A token per request would double every Page sync's API calls."""
+    connector = MetaConnector("user-token")
+    lookups = 0
+
+    def fake_get(path, params=None, authenticate=True, token=None):
+        nonlocal lookups
+        if path == "PAGE1":
+            lookups += 1
+            return {"access_token": "t"}
+        return {"data": []}
+
+    monkeypatch.setattr(connector, "_get", fake_get)
+    connector.fetch("page_posts", "PAGE1", None, None, None)
+    connector.fetch("page_posts", "PAGE1", None, None, None)
+    assert lookups == 1
+
+
+def test_a_page_with_no_token_of_its_own_says_what_is_missing(monkeypatch):
+    """
+    Otherwise this fails as a bare OAuth error, which sends someone to check
+    the token they just successfully used everywhere else.
+    """
+    connector = MetaConnector("user-token")
+
+    def fake_get(path, params=None, authenticate=True, token=None):
+        if path == "PAGE1":
+            return {}  # no access_token in the response
+        return {"data": []}
+
+    monkeypatch.setattr(connector, "_get", fake_get)
+    with pytest.raises(ConnectorError) as raised:
+        connector.fetch("page_posts", "PAGE1", None, None, None)
+
+    assert "pages_show_list" in str(raised.value)
+    assert "administer" in str(raised.value).lower()
+
+
+def test_ad_and_instagram_endpoints_still_use_the_user_token(monkeypatch):
+    """Only Pages need this. Sending a page token elsewhere would break them."""
+    connector = MetaConnector("user-token")
+    seen: list[tuple[str, str | None]] = []
+
+    def fake_get(path, params=None, authenticate=True, token=None):
+        seen.append((path, token))
+        return {"data": []}
+
+    monkeypatch.setattr(connector, "_get", fake_get)
+    connector.fetch("campaigns", "act_1", None, None, None)
+    connector.fetch("instagram_media", "ig_1", None, None, None)
+
+    assert seen == [("act_1/campaigns", None), ("ig_1/media", None)]

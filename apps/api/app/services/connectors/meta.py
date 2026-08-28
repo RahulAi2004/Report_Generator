@@ -164,6 +164,8 @@ class MetaConnector:
         self._timeout = timeout
         self._app_id = (app_id or "").strip()
         self._app_secret = (app_secret or "").strip()
+        #: Page-scoped tokens, fetched on demand. See _page_token.
+        self._page_tokens: dict[str, str | None] = {}
 
     @property
     def has_app_credentials(self) -> bool:
@@ -447,8 +449,9 @@ class MetaConnector:
                 detail={
                     "category": item.get("category"),
                     "followers": item.get("fan_count"),
-                    # Page-scoped tokens are stored, never displayed: a Page
-                    # token is a credential like any other.
+                    # Whether this Page issues a token of its own, which its
+                    # endpoints require. Never the token itself: it is a
+                    # credential, and discovery is sent to the browser.
                     "has_page_token": bool(item.get("access_token")),
                 },
             )
@@ -518,6 +521,7 @@ class MetaConnector:
                 "id,message,created_time,permalink_url,status_type,"
                 "shares,comments.summary(true).limit(0),reactions.summary(true).limit(0)",
                 c,
+                as_page=True,
             ),
             "page_insights": self._fetch_page_insights,
             "instagram_media": lambda r, s, u, c: self._fetch_edge(
@@ -533,14 +537,51 @@ class MetaConnector:
             raise ConnectorError(f"Meta connector has no dataset called '{dataset}'.")
         return handler(resource_id, since, until, cursor)
 
+    def _page_token(self, page_id: str) -> str | None:
+        """
+        The Page's own access token.
+
+        Facebook Page endpoints do not accept a user token -- they answer
+        "Invalid OAuth 2.0 Access Token" and nothing else explains why. The
+        Page token is fetched with the user token and used for that Page's
+        requests only.
+
+        Cached for the life of this client, which is one sync: page tokens can
+        be revoked, and holding one across hours would mean failing with a
+        stale credential rather than a fresh error.
+        """
+        if page_id in self._page_tokens:
+            return self._page_tokens[page_id]
+        try:
+            body = self._get(page_id, {"fields": "access_token"})
+            token = body.get("access_token")
+        except ConnectorError:
+            token = None
+        self._page_tokens[page_id] = token
+        return token
+
     def _fetch_edge(
-        self, resource_id: str, edge: str, fields: str, cursor: str | None
+        self,
+        resource_id: str,
+        edge: str,
+        fields: str,
+        cursor: str | None,
+        as_page: bool = False,
     ) -> Page:
         """A plain list endpoint: campaigns, ads, posts, media."""
         params: dict[str, Any] = {"fields": fields, "limit": PAGE_LIMIT}
         if cursor:
             params["after"] = cursor
-        body = self._get(f"{resource_id}/{edge}", params)
+
+        token = self._page_token(resource_id) if as_page else None
+        if as_page and token is None:
+            raise ConnectorError(
+                "This Page did not return an access token of its own. Facebook "
+                "Page data needs one, which usually means the token is missing "
+                "pages_show_list, or the account does not administer this Page."
+            )
+
+        body = self._get(f"{resource_id}/{edge}", params, token=token)
         return Page(
             rows=[flatten(item) for item in body.get("data", [])],
             cursor=_next_cursor(body),
@@ -582,12 +623,18 @@ class MetaConnector:
             "page_impressions,page_impressions_unique,page_engaged_users,"
             "page_post_engagements,page_fans"
         )
+        token = self._page_token(page_id)
+        if token is None:
+            raise ConnectorError(
+                "This Page did not return an access token of its own, which "
+                "Facebook Page insights require."
+            )
         body = self._get(f"{page_id}/insights", {
             "metric": metrics,
             "period": "day",
             "since": since.isoformat(),
             "until": until.isoformat(),
-        })
+        }, token=token)
         return Page(rows=_unpivot_insights(body.get("data", [])), cursor=None)
 
     def _fetch_instagram_insights(
