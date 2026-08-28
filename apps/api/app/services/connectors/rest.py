@@ -62,7 +62,7 @@ class RestConnector:
             )
         except httpx.TimeoutException as error:
             raise ConnectorError(
-                f"{self.label()} did not answer within {int(self._timeout)} seconds.",
+                self.timeout_message(int(self._timeout)),
                 retryable=True,
             ) from error
         except httpx.HTTPError as error:
@@ -85,6 +85,19 @@ class RestConnector:
 
     def label(self) -> str:
         return self.provider.replace("_", " ").title()
+
+    def timeout_message(self, seconds: int) -> str:
+        """
+        What a timeout most likely means for this provider.
+
+        "Did not answer in time" is true and useless. A provider that knows its
+        endpoints can say whether the credentials are suspect or the request was
+        simply too big.
+        """
+        return (
+            f"{self.label()} did not answer within {seconds} seconds. The service "
+            "may be slow at the moment -- this will be retried."
+        )
 
     #: Below this, a "credential" is too short to redact usefully: replacing a
     #: two-character string everywhere destroys the message and hides nothing a

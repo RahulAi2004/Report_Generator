@@ -313,3 +313,81 @@ def test_an_empty_token_is_refused_before_any_request():
         Bare("")
     with pytest.raises(ConnectorError):
         Bare("   ")
+
+
+# ---------------------------------------------------------------------------
+# Discovery must be cheap
+# ---------------------------------------------------------------------------
+def test_ss_discovery_never_asks_for_the_whole_catalogue():
+    """
+    The regression this exists for: discovery called /products/, which returns
+    S&S's entire catalogue. It timed out after 45 seconds on credentials that
+    were perfectly correct, and reported that as a failure.
+    """
+    assert "/products/" not in SSActivewearConnector.DISCOVERY_ENDPOINTS
+    assert SSActivewearConnector.DISCOVERY_ENDPOINTS
+
+
+def test_ss_discovery_tries_the_next_endpoint_when_one_is_gone(monkeypatch):
+    """
+    "This key is wrong" and "that endpoint moved" are different problems and
+    must not produce the same message.
+    """
+    connector = SSActivewearConnector("a-long-enough-key", account_number="1008392")
+    tried: list[str] = []
+
+    def fake(path, params=None):
+        tried.append(path)
+        if path == "/categories/":
+            raise ConnectorError("S&S Activewear has nothing at that address.")
+        return [{"id": 1}, {"id": 2}]
+
+    monkeypatch.setattr(connector, "_request", fake)
+    found = connector.discover()
+
+    assert tried[:2] == ["/categories/", "/brands/"]
+    assert found.resources[0].detail["verified_with"] == "/brands/"
+    assert "2 rows" in found.detail
+
+
+def test_a_rejected_credential_stops_immediately(monkeypatch):
+    """
+    Trying four more endpoints with a key S&S has already refused only makes the
+    same answer take four times as long.
+    """
+    connector = SSActivewearConnector("a-long-enough-key")
+    tried: list[str] = []
+
+    def fake(path, params=None):
+        tried.append(path)
+        raise ConnectorError("S&S rejected these credentials. Add the account number.")
+
+    monkeypatch.setattr(connector, "_request", fake)
+    with pytest.raises(ConnectorError):
+        connector.discover()
+    assert len(tried) == 1
+
+
+def test_the_authentication_form_is_reported_back(monkeypatch):
+    """Which of the two ways worked is the thing the next person needs to know."""
+    connector = SSActivewearConnector("a-long-enough-key", account_number="1008392")
+    monkeypatch.setattr(connector, "_request", lambda *a, **k: [{"id": 1}])
+    assert "account number and key" in connector.discover().detail
+
+    alone = SSActivewearConnector("a-long-enough-key")
+    monkeypatch.setattr(alone, "_request", lambda *a, **k: [{"id": 1}])
+    assert "key alone" in alone.discover().detail
+
+
+def test_an_ss_timeout_says_the_request_was_probably_too_big():
+    """
+    "Did not answer in time" is true and useless. It sends someone to check
+    credentials that were never the problem.
+    """
+    message = SSActivewearConnector("a-long-enough-key").timeout_message(45)
+    assert "too broad" in message
+    assert "credentials are wrong" in message
+
+
+def test_the_generic_timeout_message_still_says_it_will_be_retried():
+    assert "retried" in Bare("a-realistic-length-token").timeout_message(45)
