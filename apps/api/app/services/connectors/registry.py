@@ -38,6 +38,11 @@ class CredentialField:
     required: bool = True
     placeholder: str = ""
     help: str = ""
+    #: Long credentials get a box you can read; short ones stay masked. A
+    #: 400-character Meta token in a single line is unreadable, but a key short
+    #: enough to fit is a key short enough to be read over a shoulder -- or to
+    #: end up legible in a screenshot.
+    multiline: bool = False
 
 
 @dataclass(frozen=True)
@@ -85,6 +90,7 @@ PROVIDERS: dict[str, ProviderSpec] = {
             ),
             CredentialField(
                 key="token", label="Access token", secret=True, required=True,
+                multiline=True,
             ),
         ),
         datasets=META_DATASETS,

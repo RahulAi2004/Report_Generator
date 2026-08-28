@@ -141,6 +141,7 @@ def providers(principal: Principal = Depends(current_principal)):
                         "required": field.required,
                         "placeholder": field.placeholder,
                         "help": field.help,
+                        "multiline": field.multiline,
                     }
                     for field in spec.credentials
                 ],

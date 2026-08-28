@@ -457,8 +457,13 @@ function ConnectorCard({
           </div>
           <p className="mt-0.5 text-2xs text-ink-muted">
             {connector.discovery?.detail ?? 'Not checked yet'} · refreshed every{' '}
-            {connector.sync_interval_minutes} minutes · API {connector.api_version}
-            {connector.has_app_secret ? ' · app secret stored' : ' · no app secret'}
+            {connector.sync_interval_minutes} minutes
+            {connector.api_version && ` · API ${connector.api_version}`}
+            {/* Only where the provider has a second credential at all: telling
+                somebody their Shippo connection has "no app secret" invites
+                them to go and look for one that does not exist. */}
+            {provider?.credentials.some((field) => field.key === 'app_secret') &&
+              (connector.has_app_secret ? ' · app secret stored' : ' · no app secret')}
           </p>
           {connector.token_expires_at && (
             <p
@@ -761,10 +766,10 @@ function CredentialInput({
   value: string;
   onChange: (value: string) => void;
 }) {
-  //: A long credential gets a textarea. Pasting a 400-character Meta token into
-  //: a single-line box and being unable to see either end of it is a small
-  //: misery that this avoids.
-  const long = field.key === 'token' && field.secret;
+  //: Declared by the provider, not guessed. A 400-character Meta token needs a
+  //: box you can read; a key short enough to fit on one line is short enough to
+  //: be read over a shoulder, or to be legible in a screenshot.
+  const long = field.multiline;
 
   return (
     <div>

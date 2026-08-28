@@ -90,6 +90,8 @@ export interface CredentialField {
   required: boolean;
   placeholder: string;
   help: string;
+  /** Long credentials get a readable box; short ones stay masked. */
+  multiline: boolean;
 }
 
 export interface Provider {
