@@ -245,12 +245,16 @@ export const api = {
   // -- API connectors -----------------------------------------------------
   connectorProviders: () => request<{ providers: Provider[] }>('/connectors/providers'),
   /** Ask the provider what a credential can reach, without storing it. */
-  discoverConnector: (body: { provider: string; token: string; api_version?: string }) =>
+  discoverConnector: (body: {
+    provider: string; token: string; api_version?: string;
+    app_id?: string; app_secret?: string;
+  }) =>
     post<Discovery>('/connectors/discover', body),
   connectors: () =>
     request<{ connectors: Connector[]; can_store_tokens: boolean }>('/connectors'),
   createConnector: (body: {
     provider: string; name: string; token: string;
+    app_id?: string; app_secret?: string;
     api_version?: string; sync_interval_minutes?: number;
   }) => post<{ id: string; name: string; discovery: Discovery }>('/connectors', body),
   refreshDiscovery: (id: string) =>

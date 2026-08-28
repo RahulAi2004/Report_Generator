@@ -14,6 +14,9 @@ export interface ConnectorResource {
 }
 
 export interface Discovery {
+  /** Whether a short-lived token was traded for a sixty-day one. */
+  exchanged_for_long_lived?: boolean;
+  has_app_credentials?: boolean;
   account_name: string | null;
   account_id: string | null;
   permissions: string[];
@@ -58,6 +61,9 @@ export interface Connector {
   provider_label: string;
   name: string;
   api_version: string;
+  app_id: string;
+  has_app_secret: boolean;
+  token_expires_at: string | null;
   is_active: boolean;
   sync_interval_minutes: number;
   last_checked_at: string | null;

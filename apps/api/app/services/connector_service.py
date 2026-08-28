@@ -74,7 +74,23 @@ def build_connector(connector: ApiConnector):
     if connector.provider == "meta":
         from app.services.connectors.meta import DEFAULT_VERSION
 
-        return MetaConnector(token, version=connector.api_version or DEFAULT_VERSION)
+        app_secret = ""
+        if connector.app_secret_encrypted:
+            try:
+                app_secret = decrypt_password(connector.app_secret_encrypted)
+            except SecretUnavailable:
+                # The token still works on its own for apps that do not require
+                # the secret; losing it should degrade rather than stop.
+                logger.warning(
+                    "App secret for connector %s could not be read", connector.id
+                )
+
+        return MetaConnector(
+            token,
+            version=connector.api_version or DEFAULT_VERSION,
+            app_id=connector.app_id or "",
+            app_secret=app_secret,
+        )
     raise ConnectorError(f"No connector is implemented for '{connector.provider}'.")
 
 

@@ -131,19 +131,114 @@ DATASETS: tuple[DatasetKind, ...] = (
 
 
 class MetaConnector:
+    """
+    A Meta app's three credentials, used for what each is actually for.
+
+    The access token alone gets data, and is what most integrations stop at.
+    The App ID and App Secret matter for three things that decide whether this
+    keeps working:
+
+    - `appsecret_proof`, which apps with "Require App Secret" enabled reject
+      every call without;
+    - `debug_token`, which needs an app token to report a token's scopes and
+      expiry, so without it discovery cannot say which permissions are missing;
+    - exchanging a short-lived token, which expires in an hour or two, for a
+      long-lived one that lasts about sixty days. Without that, "refreshes
+      hourly" stops being true the same afternoon it is set up.
+    """
+
     provider = "meta"
 
-    def __init__(self, token: str, version: str = DEFAULT_VERSION, timeout: float = 45.0):
+    def __init__(
+        self,
+        token: str,
+        version: str = DEFAULT_VERSION,
+        timeout: float = 45.0,
+        app_id: str = "",
+        app_secret: str = "",
+    ):
         if not token or not token.strip():
             raise ConnectorError("No access token was provided.")
         self._token = token.strip()
         self._version = version.strip() or DEFAULT_VERSION
         self._timeout = timeout
+        self._app_id = (app_id or "").strip()
+        self._app_secret = (app_secret or "").strip()
+
+    @property
+    def has_app_credentials(self) -> bool:
+        return bool(self._app_id and self._app_secret)
+
+    def _proof(self, token: str | None = None) -> str | None:
+        """
+        HMAC of the token under the app secret.
+
+        Meta requires this on every call once an app has "Require App Secret"
+        turned on, and accepts it harmlessly otherwise -- so it is sent whenever
+        the secret is known rather than only when something has already failed.
+        """
+        if not self._app_secret:
+            return None
+        import hashlib
+        import hmac
+
+        return hmac.new(
+            self._app_secret.encode("utf-8"),
+            (token or self._token).encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+
+    def _app_token(self) -> str | None:
+        """The app's own token, which is what debug_token has to be called with."""
+        if not self.has_app_credentials:
+            return None
+        return f"{self._app_id}|{self._app_secret}"
+
+    def exchange_for_long_lived(self) -> tuple[str, int | None]:
+        """
+        Trade a short-lived token for one that lasts about sixty days.
+
+        Meta's tokens from the Graph API Explorer expire in an hour or two. A
+        connector built on one works during the demo and is broken by evening,
+        which is the single most common way an integration like this fails.
+
+        Returns the token and its lifetime in seconds; a token that is already
+        long-lived comes back unchanged, which Meta signals by omitting the
+        expiry.
+        """
+        if not self.has_app_credentials:
+            raise ConnectorError(
+                "Exchanging for a long-lived token needs the App ID and App Secret."
+            )
+
+        body = self._get("oauth/access_token", {
+            "grant_type": "fb_exchange_token",
+            "client_id": self._app_id,
+            "client_secret": self._app_secret,
+            "fb_exchange_token": self._token,
+        }, authenticate=False)
+
+        token = body.get("access_token")
+        if not token:
+            raise ConnectorError("Meta did not return a token to exchange for.")
+        self._token = token
+        return token, body.get("expires_in")
 
     # -- HTTP ---------------------------------------------------------------
-    def _get(self, path: str, params: dict[str, Any] | None = None) -> dict:
+    def _get(
+        self,
+        path: str,
+        params: dict[str, Any] | None = None,
+        authenticate: bool = True,
+        token: str | None = None,
+    ) -> dict:
         url = f"{GRAPH_HOST}/{self._version}/{path.lstrip('/')}"
-        query = {"access_token": self._token, **(params or {})}
+        query = dict(params or {})
+        if authenticate:
+            query["access_token"] = token or self._token
+            proof = self._proof(token)
+            if proof:
+                query["appsecret_proof"] = proof
         try:
             response = httpx.get(url, params=query, timeout=self._timeout)
         except httpx.TimeoutException as error:
@@ -174,6 +269,8 @@ class MetaConnector:
         if not text:
             return text
         cleaned = text.replace(self._token, "[the token]")
+        if self._app_secret:
+            cleaned = cleaned.replace(self._app_secret, "[the app secret]")
         # Also any other long token-shaped run, in case Meta quotes a
         # normalised form of it rather than exactly what was sent.
         import re
@@ -226,6 +323,11 @@ class MetaConnector:
                 "This token does not have permission for that data. "
                 f"{message}".strip()
             )
+        if code == 1 and "appsecret_proof" in message.lower():
+            return ConnectorError(
+                "This Meta app requires the App Secret on every call. Add the App "
+                "ID and App Secret to this connection and it will be sent."
+            )
         if code == 100:
             return ConnectorError(
                 f"Meta rejected the request. {message}".strip()
@@ -252,8 +354,16 @@ class MetaConnector:
         found.account_name = me.get("name")
 
         # Permissions and expiry: the two things that explain most failures.
+        # debug_token only answers properly for an app token, which is why the
+        # App ID and Secret are worth having -- without them this returns
+        # nothing useful and the connector cannot say which scopes are missing.
         try:
-            debug = self._get("debug_token", {"input_token": self._token})
+            app_token = self._app_token()
+            debug = self._get(
+                "debug_token",
+                {"input_token": self._token, "access_token": app_token or self._token},
+                authenticate=False,
+            )
             data = debug.get("data", {})
             found.permissions = sorted(data.get("scopes", []) or [])
             expires = data.get("expires_at")

@@ -9,6 +9,7 @@ error, and an empty table looks like a business with no spend.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Literal
 
 import sqlalchemy as sa
@@ -35,13 +36,22 @@ class TokenInput(BaseModel):
     provider: Literal["meta"] = "meta"
     token: str = Field(min_length=8, max_length=4000)
     api_version: str = Field(default="", max_length=20)
+    #: Not secret -- it is in Meta's own URLs.
+    app_id: str = Field(default="", max_length=60)
+    app_secret: str = Field(default="", max_length=200)
+    #: Trade a short-lived token for a sixty-day one before doing anything else.
+    exchange_for_long_lived: bool = True
 
 
 class ConnectorInput(BaseModel):
     provider: Literal["meta"] = "meta"
     name: str = Field(min_length=1, max_length=120)
     token: str | None = Field(default=None, max_length=4000)
+    app_id: str = Field(default="", max_length=60)
+    #: Omitted on update means "keep the stored one".
+    app_secret: str | None = Field(default=None, max_length=200)
     api_version: str = Field(default="", max_length=20)
+    exchange_for_long_lived: bool = True
     sync_interval_minutes: int = Field(default=60, ge=15, le=1440)
     is_active: bool = True
 
@@ -61,6 +71,12 @@ def _connector_payload(connector: ApiConnector, datasets: list[ConnectorDataset]
         "provider_label": PROVIDER_LABELS.get(connector.provider, connector.provider),
         "name": connector.name,
         "api_version": connector.api_version,
+        "app_id": connector.app_id,
+        "has_app_secret": bool(connector.app_secret_encrypted),
+        "token_expires_at": (
+            connector.token_expires_at.isoformat()
+            if connector.token_expires_at else None
+        ),
         "is_active": connector.is_active,
         "sync_interval_minutes": connector.sync_interval_minutes,
         "last_checked_at": (
@@ -138,7 +154,25 @@ def discover(
     """
     from app.services.connectors.meta import MetaConnector
 
-    client = MetaConnector(payload.token, version=payload.api_version or META_DEFAULT_VERSION)
+    client = MetaConnector(
+        payload.token,
+        version=payload.api_version or META_DEFAULT_VERSION,
+        app_id=payload.app_id,
+        app_secret=payload.app_secret,
+    )
+
+    # Before anything else: a token from the Graph API Explorer lasts an hour or
+    # two. Exchanging it here is what makes "refreshes hourly" true tomorrow.
+    exchanged = False
+    if payload.exchange_for_long_lived and client.has_app_credentials:
+        try:
+            client.exchange_for_long_lived()
+            exchanged = True
+        except ConnectorError:
+            # Already long-lived, or an app that does not allow it. Neither is
+            # a reason to fail discovery.
+            pass
+
     try:
         found = client.discover()
     except ConnectorError as error:
@@ -147,7 +181,10 @@ def discover(
     write_audit(db, principal, "connector_discovered",
                 payload={"provider": payload.provider,
                          "resources": len(found.resources)})
-    return found.as_payload()
+    body = found.as_payload()
+    body["exchanged_for_long_lived"] = exchanged
+    body["has_app_credentials"] = client.has_app_credentials
+    return body
 
 
 @router.get("")
@@ -191,13 +228,37 @@ def create_connector(
     from app.services.connectors.meta import MetaConnector
 
     version = payload.api_version or META_DEFAULT_VERSION
+    client = MetaConnector(
+        payload.token, version=version,
+        app_id=payload.app_id, app_secret=payload.app_secret or "",
+    )
+
+    # The token that gets stored is the long-lived one wherever that is
+    # possible: storing the short-lived one would work now and stop by evening.
+    stored_token = payload.token
+    expires_at = None
+    if payload.exchange_for_long_lived and client.has_app_credentials:
+        try:
+            stored_token, lifetime = client.exchange_for_long_lived()
+            if lifetime:
+                from datetime import timedelta
+
+                expires_at = (
+                    datetime.now(timezone.utc) + timedelta(seconds=int(lifetime))
+                ).replace(tzinfo=None)
+        except ConnectorError:
+            pass
+
     try:
-        found = MetaConnector(payload.token, version=version).discover()
+        found = client.discover()
     except ConnectorError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
     try:
-        secret = encrypt_password(payload.token)
+        secret = encrypt_password(stored_token)
+        app_secret_blob = (
+            encrypt_password(payload.app_secret) if payload.app_secret else None
+        )
     except SecretUnavailable as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
 
@@ -205,6 +266,9 @@ def create_connector(
         provider=payload.provider,
         name=payload.name.strip(),
         token_encrypted=secret,
+        app_id=payload.app_id,
+        app_secret_encrypted=app_secret_blob,
+        token_expires_at=expires_at,
         api_version=version,
         discovery=found.as_payload(),
         sync_interval_minutes=payload.sync_interval_minutes,
@@ -254,11 +318,19 @@ def update_connector(
     if payload.api_version:
         connector.api_version = payload.api_version
     # An omitted token means "keep the stored one".
+    if payload.app_id:
+        connector.app_id = payload.app_id
+    if payload.app_secret:
+        try:
+            connector.app_secret_encrypted = encrypt_password(payload.app_secret)
+        except SecretUnavailable as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
     if payload.token:
         try:
             connector.token_encrypted = encrypt_password(payload.token)
         except SecretUnavailable as error:
             raise HTTPException(status_code=503, detail=str(error)) from error
+        connector.token_expires_at = None
         connector.last_error = None
     db.commit()
     write_audit(db, principal, "connector_updated", resource_id=connector.id)

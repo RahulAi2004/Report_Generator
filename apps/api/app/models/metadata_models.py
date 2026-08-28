@@ -302,6 +302,15 @@ class ApiConnector(Base):
     name: Mapped[str] = mapped_column(sa.String(120))
     #: AES-GCM ciphertext. Never returned by any API, never logged.
     token_encrypted: Mapped[bytes | None] = mapped_column(sa.LargeBinary, nullable=True)
+    #: The app the token belongs to. Not a secret -- it appears in Meta's own
+    #: URLs -- so it is stored and shown as-is.
+    app_id: Mapped[str] = mapped_column(sa.String(60), default="")
+    #: The app secret is, and gets exactly the same treatment as the token.
+    app_secret_encrypted: Mapped[bytes | None] = mapped_column(
+        sa.LargeBinary, nullable=True
+    )
+    #: When the stored token stops working, as Meta reported it.
+    token_expires_at: Mapped[datetime | None] = mapped_column(sa.DateTime, nullable=True)
     #: The provider's API version. Versions are retired on a schedule, so this
     #: has to be changeable without a deployment.
     api_version: Mapped[str] = mapped_column(sa.String(20), default="")

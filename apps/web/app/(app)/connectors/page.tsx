@@ -170,6 +170,8 @@ function AddConnector({
   onCancel: () => void;
   onSaved: (name: string) => void;
 }) {
+  const [appId, setAppId] = useState('');
+  const [appSecret, setAppSecret] = useState('');
   const [token, setToken] = useState('');
   const [name, setName] = useState('');
   const [version, setVersion] = useState(provider.default_api_version);
@@ -178,7 +180,13 @@ function AddConnector({
 
   const discover = useMutation({
     mutationFn: () =>
-      api.discoverConnector({ provider: provider.key, token, api_version: version }),
+      api.discoverConnector({
+        provider: provider.key,
+        token,
+        api_version: version,
+        app_id: appId.trim(),
+        app_secret: appSecret.trim(),
+      }),
     onSuccess: (result) => {
       setFound(result);
       setError(null);
@@ -196,6 +204,8 @@ function AddConnector({
         provider: provider.key,
         name: name.trim(),
         token,
+        app_id: appId.trim(),
+        app_secret: appSecret.trim(),
         api_version: version,
         sync_interval_minutes: 60,
       }),
@@ -212,6 +222,38 @@ function AddConnector({
       </div>
 
       <div className="space-y-3 p-4">
+        <div className="grid gap-2.5 md:grid-cols-2">
+          <div>
+            <label className="label">App ID</label>
+            <input
+              value={appId}
+              onChange={(event) => setAppId(event.target.value)}
+              placeholder="From Meta for Developers → your app"
+              className="field font-mono"
+              autoComplete="off"
+            />
+          </div>
+          <div>
+            <label className="label">App Secret</label>
+            <input
+              type="password"
+              value={appSecret}
+              onChange={(event) => setAppSecret(event.target.value)}
+              className="field"
+              autoComplete="new-password"
+            />
+          </div>
+        </div>
+
+        <p className="rounded border border-line bg-canvas px-3 py-2 text-[11px] leading-relaxed text-ink-muted">
+          The App ID and Secret are optional, but three things need them.
+          Apps with <strong>Require App Secret</strong> turned on reject every call
+          without a signature. Reading which permissions a token has needs an app
+          token. And a token from the Graph API Explorer expires in an hour or two —
+          with these, it is exchanged for one that lasts about sixty days, which is
+          what keeps the hourly refresh working tomorrow.
+        </p>
+
         <div>
           <label className="label">Access token</label>
           <textarea
@@ -299,6 +341,19 @@ function DiscoveryPanel({ found }: { found: Discovery }) {
         Connected as {found.account_name ?? 'an unnamed account'} — {found.detail}
       </p>
 
+      {found.exchanged_for_long_lived && (
+        <p className="mt-1 text-2xs text-good">
+          Exchanged for a long-lived token — the stored one lasts about sixty days,
+          not the hour or two the pasted one had.
+        </p>
+      )}
+      {!found.has_app_credentials && (
+        <p className="mt-1 text-2xs text-warn">
+          No App ID and Secret given, so the token is stored exactly as pasted. If it
+          came from the Graph API Explorer it will stop working within a couple of
+          hours.
+        </p>
+      )}
       {expiring && (
         <p className={clsx('mt-1 text-2xs', soon ? 'text-warn' : 'text-ink-muted')}>
           This token expires {expiring.toLocaleDateString()}
@@ -388,7 +443,21 @@ function ConnectorCard({
           <p className="mt-0.5 text-2xs text-ink-muted">
             {connector.discovery?.detail ?? 'Not checked yet'} · refreshed every{' '}
             {connector.sync_interval_minutes} minutes · API {connector.api_version}
+            {connector.has_app_secret ? ' · app secret stored' : ' · no app secret'}
           </p>
+          {connector.token_expires_at && (
+            <p
+              className={clsx(
+                'mt-0.5 text-2xs',
+                new Date(connector.token_expires_at).getTime() - Date.now()
+                  < 7 * 24 * 60 * 60 * 1000
+                  ? 'text-warn'
+                  : 'text-ink-faint',
+              )}
+            >
+              Token expires {new Date(connector.token_expires_at).toLocaleDateString()}
+            </p>
+          )}
           {connector.last_error && (
             <p className="mt-1 text-2xs text-danger">{connector.last_error}</p>
           )}

@@ -273,3 +273,66 @@ def test_redaction_does_not_eat_the_useful_part_of_a_message():
         "error": {"code": 10, "message": "(#10) requires ads_read permission"}
     }))
     assert "ads_read" in str(error)
+
+
+# ---------------------------------------------------------------------------
+# App ID and App Secret
+# ---------------------------------------------------------------------------
+def test_the_app_secret_proof_is_an_hmac_of_the_token():
+    """
+    Apps with "Require App Secret" turned on reject every call without this.
+    Computing it wrong fails the same way as not sending it, so the value is
+    checked against the definition rather than merely being present.
+    """
+    import hashlib
+    import hmac
+
+    connector = MetaConnector("the-token", app_id="123", app_secret="the-secret")
+    expected = hmac.new(b"the-secret", b"the-token", hashlib.sha256).hexdigest()
+
+    assert connector._proof() == expected
+    assert connector.has_app_credentials is True
+
+
+def test_without_an_app_secret_no_proof_is_sent():
+    """Sending a wrong proof is worse than sending none."""
+    connector = MetaConnector("the-token")
+    assert connector._proof() is None
+    assert connector.has_app_credentials is False
+
+
+def test_the_app_token_is_the_id_and_secret_pair():
+    """debug_token only answers properly for an app token."""
+    connector = MetaConnector("t", app_id="555", app_secret="shh")
+    assert connector._app_token() == "555|shh"
+    assert MetaConnector("t")._app_token() is None
+
+
+def test_exchanging_without_app_credentials_says_what_is_missing():
+    connector = MetaConnector("short-lived-token")
+    with pytest.raises(ConnectorError) as raised:
+        connector.exchange_for_long_lived()
+    assert "App ID" in str(raised.value)
+    assert "App Secret" in str(raised.value)
+
+
+def test_the_app_secret_is_taken_out_of_error_messages_too():
+    """It is a credential like any other, and Meta will happily echo it back."""
+    connector = MetaConnector("tok", app_id="1", app_secret="super-secret-value")
+    error = connector._explain(response(400, {
+        "error": {"code": 100, "message": "bad request with super-secret-value in it"}
+    }))
+    assert "super-secret-value" not in str(error)
+
+
+def test_a_missing_appsecret_proof_says_exactly_what_to_add():
+    """
+    The most confusing Meta failure there is: everything is correct, and every
+    call fails, because the app has one setting turned on.
+    """
+    connector = MetaConnector("tok")
+    error = connector._explain(response(400, {
+        "error": {"code": 1, "message": "API calls from the server require an appsecret_proof argument"}
+    }))
+    assert "App Secret" in str(error)
+    assert "App ID" in str(error)
