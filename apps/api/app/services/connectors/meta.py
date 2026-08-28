@@ -162,6 +162,24 @@ class MetaConnector:
         except ValueError as error:
             raise ConnectorError("Meta returned something that was not JSON.") from error
 
+    def _redact(self, text: str) -> str:
+        """
+        Take the token back out of Meta's message.
+
+        Meta quotes the credential in some errors -- "Malformed access token
+        EAAB..." -- and passing that through puts it in the browser, in a
+        screenshot somebody shares, and in whatever the client logs. The
+        message is just as useful without it.
+        """
+        if not text:
+            return text
+        cleaned = text.replace(self._token, "[the token]")
+        # Also any other long token-shaped run, in case Meta quotes a
+        # normalised form of it rather than exactly what was sent.
+        import re
+
+        return re.sub(r"EAA[A-Za-z0-9_\-]{12,}", "[a token]", cleaned)
+
     def _explain(self, response: httpx.Response) -> ConnectorError:
         """
         Turn Meta's error into the sentence that fixes it.
@@ -176,7 +194,7 @@ class MetaConnector:
 
         code = error.get("code")
         subcode = error.get("error_subcode")
-        message = error.get("message", "").strip()
+        message = self._redact(error.get("message", "").strip())
 
         if response.status_code == 400 and "Unsupported get request" in message:
             return ConnectorError(

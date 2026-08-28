@@ -236,3 +236,40 @@ def test_an_unknown_dataset_is_refused_by_name(connector):
     with pytest.raises(ConnectorError) as raised:
         connector.fetch("not_a_dataset", "act_1", None, None, None)
     assert "not_a_dataset" in str(raised.value)
+
+
+# ---------------------------------------------------------------------------
+# Credentials in error messages
+# ---------------------------------------------------------------------------
+def test_the_token_is_taken_back_out_of_meta_s_message():
+    """
+    Meta quotes the credential in some errors. Passing that through puts it in
+    the browser, in a screenshot somebody shares, and in whatever the client
+    logs -- and the message is just as useful without it.
+    """
+    secret = "EAABsecretTokenValue1234567890"
+    connector = MetaConnector(secret)
+
+    error = connector._explain(response(400, {
+        "error": {"code": 190, "message": f"Malformed access token {secret}"}
+    }))
+
+    assert secret not in str(error)
+    assert "malformed access token" in str(error).lower()
+
+
+def test_a_token_shaped_string_meta_returns_is_redacted_too():
+    """Meta sometimes quotes a normalised form rather than what was sent."""
+    connector = MetaConnector("some-other-token-entirely")
+    error = connector._explain(response(400, {
+        "error": {"code": 190, "message": "Invalid OAuth token EAAGm0PX4ZCpsBAxxxxxxxxxxxx"}
+    }))
+    assert "EAAGm0PX4ZCpsBA" not in str(error)
+
+
+def test_redaction_does_not_eat_the_useful_part_of_a_message():
+    connector = MetaConnector("a-token")
+    error = connector._explain(response(400, {
+        "error": {"code": 10, "message": "(#10) requires ads_read permission"}
+    }))
+    assert "ads_read" in str(error)
