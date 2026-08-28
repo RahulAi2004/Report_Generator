@@ -33,9 +33,8 @@ from app.core.secrets import SecretUnavailable, decrypt_password
 from app.domain.schema.registry import ColumnMeta, DataType, TableMeta
 from app.domain.uploads.parser import coerce, infer_type, safe_identifier
 from app.models.metadata_models import ApiConnector, ConnectorDataset
+from app.services.connectors import registry as provider_registry
 from app.services.connectors.base import ConnectorError, DatasetKind, union_columns
-from app.services.connectors.meta import DATASETS as META_DATASETS
-from app.services.connectors.meta import MetaConnector
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +52,10 @@ MAX_ROWS_PER_SYNC = 200_000
 #: returns a cursor forever cannot spin here indefinitely.
 MAX_PAGES = 200
 
-PROVIDERS: dict[str, tuple[DatasetKind, ...]] = {"meta": META_DATASETS}
+#: Kept as a plain mapping so a test can register a stub provider.
+PROVIDERS: dict[str, tuple[DatasetKind, ...]] = {
+    key: spec.datasets for key, spec in provider_registry.PROVIDERS.items()
+}
 
 
 def dataset_kinds(provider: str) -> tuple[DatasetKind, ...]:
@@ -65,33 +67,36 @@ def dataset_kind(provider: str, key: str) -> DatasetKind | None:
 
 
 def build_connector(connector: ApiConnector):
-    """The client for a stored credential."""
+    """The client for a stored credential, whichever provider it is for."""
+    spec = provider_registry.spec(connector.provider)
+    if spec is None:
+        raise ConnectorError(
+            f"No connector is implemented for '{connector.provider}'."
+        )
+
     try:
         token = decrypt_password(connector.token_encrypted)
     except SecretUnavailable as error:
         raise ConnectorError(str(error)) from error
 
-    if connector.provider == "meta":
-        from app.services.connectors.meta import DEFAULT_VERSION
+    app_secret = ""
+    if connector.app_secret_encrypted:
+        try:
+            app_secret = decrypt_password(connector.app_secret_encrypted)
+        except SecretUnavailable:
+            # Some providers work without it. Losing the second credential
+            # should degrade rather than stop, and the call that needs it will
+            # say so in its own words.
+            logger.warning(
+                "Second credential for connector %s could not be read", connector.id
+            )
 
-        app_secret = ""
-        if connector.app_secret_encrypted:
-            try:
-                app_secret = decrypt_password(connector.app_secret_encrypted)
-            except SecretUnavailable:
-                # The token still works on its own for apps that do not require
-                # the secret; losing it should degrade rather than stop.
-                logger.warning(
-                    "App secret for connector %s could not be read", connector.id
-                )
-
-        return MetaConnector(
-            token,
-            version=connector.api_version or DEFAULT_VERSION,
-            app_id=connector.app_id or "",
-            app_secret=app_secret,
-        )
-    raise ConnectorError(f"No connector is implemented for '{connector.provider}'.")
+    return spec.build(
+        token=token,
+        api_version=connector.api_version or spec.default_api_version,
+        app_id=connector.app_id or "",
+        app_secret=app_secret,
+    )
 
 
 # ---------------------------------------------------------------------------

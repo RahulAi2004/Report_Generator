@@ -82,10 +82,23 @@ export interface ProviderDataset {
   time_series: boolean;
 }
 
+export interface CredentialField {
+  key: string;
+  label: string;
+  /** Secret fields are encrypted, redacted from errors and never sent back. */
+  secret: boolean;
+  required: boolean;
+  placeholder: string;
+  help: string;
+}
+
 export interface Provider {
   key: string;
   label: string;
+  where_to_find: string;
   default_api_version: string;
+  supports_token_exchange: boolean;
+  credentials: CredentialField[];
   datasets: ProviderDataset[];
 }
 

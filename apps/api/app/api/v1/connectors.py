@@ -23,17 +23,22 @@ from app.core.security import Permission, Principal
 from app.core.secrets import SecretUnavailable, encrypt_password, encryption_available
 from app.models.metadata_models import ApiConnector, ConnectorDataset
 from app.services import connector_service, schema_service
+from app.services.connectors import registry as provider_registry
 from app.services.connectors.base import ConnectorError
-from app.services.connectors.meta import DEFAULT_VERSION as META_DEFAULT_VERSION
 
 router = APIRouter(prefix="/connectors", tags=["connectors"])
 
-PROVIDER_LABELS = {"meta": "Meta (Facebook & Instagram)"}
+
+def _spec(provider: str):
+    spec = provider_registry.spec(provider)
+    if spec is None:
+        raise HTTPException(status_code=400, detail=f"'{provider}' cannot be connected.")
+    return spec
 
 
 # ---------------------------------------------------------------------------
 class TokenInput(BaseModel):
-    provider: Literal["meta"] = "meta"
+    provider: str = Field(default="meta", max_length=40)
     token: str = Field(min_length=8, max_length=4000)
     api_version: str = Field(default="", max_length=20)
     #: Not secret -- it is in Meta's own URLs.
@@ -44,7 +49,7 @@ class TokenInput(BaseModel):
 
 
 class ConnectorInput(BaseModel):
-    provider: Literal["meta"] = "meta"
+    provider: str = Field(default="meta", max_length=40)
     name: str = Field(min_length=1, max_length=120)
     token: str | None = Field(default=None, max_length=4000)
     app_id: str = Field(default="", max_length=60)
@@ -68,7 +73,10 @@ def _connector_payload(connector: ApiConnector, datasets: list[ConnectorDataset]
     return {
         "id": connector.id,
         "provider": connector.provider,
-        "provider_label": PROVIDER_LABELS.get(connector.provider, connector.provider),
+        "provider_label": (
+            spec.label if (spec := provider_registry.spec(connector.provider))
+            else connector.provider
+        ),
         "name": connector.name,
         "api_version": connector.api_version,
         "app_id": connector.app_id,
@@ -116,13 +124,26 @@ def _dataset_payload(dataset: ConnectorDataset) -> dict:
 # ---------------------------------------------------------------------------
 @router.get("/providers")
 def providers(principal: Principal = Depends(current_principal)):
-    """What can be connected, and what each provider offers."""
+    """What can be connected, which credentials each needs, and what it offers."""
     return {
         "providers": [
             {
-                "key": key,
-                "label": label,
-                "default_api_version": META_DEFAULT_VERSION if key == "meta" else "",
+                "key": spec.key,
+                "label": spec.label,
+                "where_to_find": spec.where_to_find,
+                "default_api_version": spec.default_api_version,
+                "supports_token_exchange": spec.supports_token_exchange,
+                "credentials": [
+                    {
+                        "key": field.key,
+                        "label": field.label,
+                        "secret": field.secret,
+                        "required": field.required,
+                        "placeholder": field.placeholder,
+                        "help": field.help,
+                    }
+                    for field in spec.credentials
+                ],
                 "datasets": [
                     {
                         "key": dataset.key,
@@ -132,10 +153,10 @@ def providers(principal: Principal = Depends(current_principal)):
                         "required_permissions": list(dataset.required_permissions),
                         "time_series": dataset.time_series,
                     }
-                    for dataset in connector_service.dataset_kinds(key)
+                    for dataset in spec.datasets
                 ],
             }
-            for key, label in PROVIDER_LABELS.items()
+            for spec in provider_registry.PROVIDERS.values()
         ]
     }
 
@@ -149,28 +170,30 @@ def discover(
     """
     Ask the provider what this credential can reach, without storing anything.
 
-    Nobody remembers which ad accounts and pages a token was generated for.
-    Showing the answer is what turns this from guesswork into a choice.
+    Nobody remembers what a credential was issued for. Showing the answer is
+    what turns this from guesswork into a choice.
     """
-    from app.services.connectors.meta import MetaConnector
-
-    client = MetaConnector(
-        payload.token,
-        version=payload.api_version or META_DEFAULT_VERSION,
+    spec = _spec(payload.provider)
+    client = spec.build(
+        token=payload.token,
+        api_version=payload.api_version or spec.default_api_version,
         app_id=payload.app_id,
         app_secret=payload.app_secret,
     )
 
-    # Before anything else: a token from the Graph API Explorer lasts an hour or
-    # two. Exchanging it here is what makes "refreshes hourly" true tomorrow.
+    # Where a provider can trade a short-lived credential for a long one, that
+    # happens first: otherwise the connector works today and not tomorrow.
     exchanged = False
-    if payload.exchange_for_long_lived and client.has_app_credentials:
+    if (
+        payload.exchange_for_long_lived
+        and spec.supports_token_exchange
+        and getattr(client, "has_app_credentials", False)
+    ):
         try:
             client.exchange_for_long_lived()
             exchanged = True
         except ConnectorError:
-            # Already long-lived, or an app that does not allow it. Neither is
-            # a reason to fail discovery.
+            # Already long-lived, or not permitted. Neither should fail discovery.
             pass
 
     try:
@@ -183,7 +206,7 @@ def discover(
                          "resources": len(found.resources)})
     body = found.as_payload()
     body["exchanged_for_long_lived"] = exchanged
-    body["has_app_credentials"] = client.has_app_credentials
+    body["has_app_credentials"] = bool(getattr(client, "has_app_credentials", False))
     return body
 
 
@@ -225,19 +248,22 @@ def create_connector(
             detail="APP_SECRET is not configured, so tokens cannot be stored safely.",
         )
 
-    from app.services.connectors.meta import MetaConnector
-
-    version = payload.api_version or META_DEFAULT_VERSION
-    client = MetaConnector(
-        payload.token, version=version,
+    spec = _spec(payload.provider)
+    version = payload.api_version or spec.default_api_version
+    client = spec.build(
+        token=payload.token, api_version=version,
         app_id=payload.app_id, app_secret=payload.app_secret or "",
     )
 
-    # The token that gets stored is the long-lived one wherever that is
-    # possible: storing the short-lived one would work now and stop by evening.
+    # The credential that gets stored is the long-lived one wherever that is
+    # possible: storing a short-lived one would work now and stop by evening.
     stored_token = payload.token
     expires_at = None
-    if payload.exchange_for_long_lived and client.has_app_credentials:
+    if (
+        payload.exchange_for_long_lived
+        and spec.supports_token_exchange
+        and getattr(client, "has_app_credentials", False)
+    ):
         try:
             stored_token, lifetime = client.exchange_for_long_lived()
             if lifetime:

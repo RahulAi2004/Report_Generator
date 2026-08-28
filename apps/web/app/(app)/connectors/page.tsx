@@ -10,6 +10,7 @@ import type {
   Connector,
   ConnectorDataset,
   ConnectorResource,
+  CredentialField,
   Discovery,
   Provider,
   ProviderDataset,
@@ -28,7 +29,8 @@ import type {
  */
 export default function ConnectorsPage() {
   const client = useQueryClient();
-  const [adding, setAdding] = useState(false);
+  //: Which provider's form is open, by key. Empty means none.
+  const [adding, setAdding] = useState('');
   const [notice, setNotice] = useState<{ tone: 'good' | 'bad'; text: string } | null>(null);
 
   const providers = useQuery({
@@ -63,7 +65,8 @@ export default function ConnectorsPage() {
   });
 
   const connectors = listing.data?.connectors ?? [];
-  const meta = providers.data?.providers.find((p) => p.key === 'meta');
+  const available = providers.data?.providers ?? [];
+  const chosen = available.find((p) => p.key === adding);
 
   return (
     <div className="flex h-full flex-col overflow-y-auto bg-canvas">
@@ -75,12 +78,21 @@ export default function ConnectorsPage() {
             reportable like any other table.
           </p>
         </div>
-        <Button variant="primary" onClick={() => setAdding(true)} disabled={adding}>
-          <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth={2}>
-            <path d="M12 5v14M5 12h14" />
-          </svg>
-          Connect Meta
-        </Button>
+        <div className="flex flex-wrap items-center gap-1.5">
+          {available.map((provider) => (
+            <Button
+              key={provider.key}
+              variant={provider.key === available[0]?.key ? 'primary' : 'default'}
+              onClick={() => setAdding(provider.key)}
+              disabled={adding === provider.key}
+            >
+              <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth={2}>
+                <path d="M12 5v14M5 12h14" />
+              </svg>
+              {provider.label.replace(/ \(.*\)$/, '')}
+            </Button>
+          ))}
+        </div>
       </header>
 
       {notice && (
@@ -107,12 +119,13 @@ export default function ConnectorsPage() {
       )}
 
       <div className="flex-1 space-y-3 p-4">
-        {adding && meta && (
+        {chosen && (
           <AddConnector
-            provider={meta}
-            onCancel={() => setAdding(false)}
+            key={chosen.key}
+            provider={chosen}
+            onCancel={() => setAdding('')}
             onSaved={(name) => {
-              setAdding(false);
+              setAdding('');
               say('good', `"${name}" connected. Choose what to sync below.`);
               client.invalidateQueries({ queryKey: ['connectors'] });
             }}
@@ -128,11 +141,11 @@ export default function ConnectorsPage() {
               Managing API connections needs an administrator account.
             </p>
           </div>
-        ) : connectors.length === 0 && !adding ? (
+        ) : connectors.length === 0 && !chosen ? (
           <div className="panel">
             <EmptyState
               title="Nothing connected yet"
-              hint="Connect Meta to pull ad spend, page and Instagram data into the report builder."
+              hint="Connect an API above to pull its data into the report builder."
             />
           </div>
         ) : (
@@ -170,27 +183,35 @@ function AddConnector({
   onCancel: () => void;
   onSaved: (name: string) => void;
 }) {
-  const [appId, setAppId] = useState('');
-  const [appSecret, setAppSecret] = useState('');
-  const [token, setToken] = useState('');
+  //: Keyed by the provider's own field names, so this form does not know what
+  //: any particular API calls its credentials.
+  const [values, setValues] = useState<Record<string, string>>({});
   const [name, setName] = useState('');
   const [version, setVersion] = useState(provider.default_api_version);
   const [found, setFound] = useState<Discovery | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const value = (key: string) => values[key] ?? '';
+  const set = (key: string, next: string) =>
+    setValues((current) => ({ ...current, [key]: next }));
+
+  const complete = provider.credentials
+    .filter((field) => field.required)
+    .every((field) => value(field.key).trim().length > 0);
+
   const discover = useMutation({
     mutationFn: () =>
       api.discoverConnector({
         provider: provider.key,
-        token,
+        token: value('token').trim(),
         api_version: version,
-        app_id: appId.trim(),
-        app_secret: appSecret.trim(),
+        app_id: value('app_id').trim(),
+        app_secret: value('app_secret').trim(),
       }),
     onSuccess: (result) => {
       setFound(result);
       setError(null);
-      if (!name && result.account_name) setName(`Meta — ${result.account_name}`);
+      if (!name && result.account_name) setName(result.account_name);
     },
     onError: (failure) => {
       setFound(null);
@@ -203,9 +224,9 @@ function AddConnector({
       api.createConnector({
         provider: provider.key,
         name: name.trim(),
-        token,
-        app_id: appId.trim(),
-        app_secret: appSecret.trim(),
+        token: value('token').trim(),
+        app_id: value('app_id').trim(),
+        app_secret: value('app_secret').trim(),
         api_version: version,
         sync_interval_minutes: 60,
       }),
@@ -222,70 +243,40 @@ function AddConnector({
       </div>
 
       <div className="space-y-3 p-4">
-        <div className="grid gap-2.5 md:grid-cols-2">
-          <div>
-            <label className="label">App ID</label>
-            <input
-              value={appId}
-              onChange={(event) => setAppId(event.target.value)}
-              placeholder="From Meta for Developers → your app"
-              className="field font-mono"
-              autoComplete="off"
-            />
-          </div>
-          <div>
-            <label className="label">App Secret</label>
-            <input
-              type="password"
-              value={appSecret}
-              onChange={(event) => setAppSecret(event.target.value)}
-              className="field"
-              autoComplete="new-password"
-            />
-          </div>
-        </div>
-
-        <p className="rounded border border-line bg-canvas px-3 py-2 text-[11px] leading-relaxed text-ink-muted">
-          The App ID and Secret are optional, but three things need them.
-          Apps with <strong>Require App Secret</strong> turned on reject every call
-          without a signature. Reading which permissions a token has needs an app
-          token. And a token from the Graph API Explorer expires in an hour or two —
-          with these, it is exchanged for one that lasts about sixty days, which is
-          what keeps the hourly refresh working tomorrow.
-        </p>
-
-        <div>
-          <label className="label">Access token</label>
-          <textarea
-            value={token}
-            onChange={(event) => setToken(event.target.value)}
-            rows={3}
-            placeholder="Paste the token from Meta Business settings"
-            className="field resize-none font-mono text-xs"
-            autoComplete="off"
-            spellCheck={false}
-          />
-          <p className="mt-0.5 text-[10px] text-ink-faint">
-            Encrypted before storage. It is never sent back to this screen and never
-            written to a log.
+        {provider.where_to_find && (
+          <p className="rounded border border-line bg-canvas px-3 py-2 text-[11px] leading-relaxed text-ink-muted">
+            <strong className="font-semibold text-ink">Where to find these:</strong>{' '}
+            {provider.where_to_find}
           </p>
-        </div>
+        )}
+
+        {provider.credentials.map((field) => (
+          <CredentialInput
+            key={field.key}
+            field={field}
+            value={value(field.key)}
+            onChange={(next) => set(field.key, next)}
+          />
+        ))}
 
         <div className="grid gap-2.5 md:grid-cols-[160px_1fr]">
-          <div>
-            <label className="label">API version</label>
-            <input
-              value={version}
-              onChange={(event) => setVersion(event.target.value)}
-              className="field font-mono"
-            />
-          </div>
+          {provider.default_api_version ? (
+            <div>
+              <label className="label">API version</label>
+              <input
+                value={version}
+                onChange={(event) => setVersion(event.target.value)}
+                className="field font-mono"
+              />
+            </div>
+          ) : (
+            <div />
+          )}
           <div className="flex items-end">
-            <Button
-              disabled={token.trim().length < 8 || discover.isPending}
-              onClick={() => discover.mutate()}
-            >
-              {discover.isPending ? 'Asking Meta…' : 'Check what this token can reach'}
+            <Button disabled={!complete || discover.isPending} onClick={() => discover.mutate()}>
+              {discover.isPending
+                ? `Asking ${provider.label}…`
+                : 'Check what these credentials can reach'}
             </Button>
           </div>
         </div>
@@ -296,7 +287,12 @@ function AddConnector({
           </p>
         )}
 
-        {found && <DiscoveryPanel found={found} />}
+        {found && (
+          <DiscoveryPanel
+            found={found}
+            provider_supports_exchange={provider.supports_token_exchange}
+          />
+        )}
 
         {found && found.resources.length > 0 && (
           <>
@@ -325,7 +321,13 @@ function AddConnector({
   );
 }
 
-function DiscoveryPanel({ found }: { found: Discovery }) {
+function DiscoveryPanel({
+  found,
+  provider_supports_exchange,
+}: {
+  found: Discovery;
+  provider_supports_exchange: boolean;
+}) {
   const byKind = new Map<string, ConnectorResource[]>();
   for (const resource of found.resources) {
     byKind.set(resource.kind, [...(byKind.get(resource.kind) ?? []), resource]);
@@ -363,14 +365,14 @@ function DiscoveryPanel({ found }: { found: Discovery }) {
         {soon && ' Syncing will stop then unless it is replaced.'}
       </p>
 
-      {!found.has_app_credentials && !found.expires_at && (
+      {provider_supports_exchange && !found.has_app_credentials && !found.expires_at && (
         <p className="mt-1 text-2xs text-warn">
           No App ID and Secret were given, so the token is stored exactly as pasted.
           Meta reports no expiry, but a token from the Graph API Explorer usually has
           one it does not declare here.
         </p>
       )}
-      {!found.has_app_credentials && found.expires_at && (
+      {provider_supports_exchange && !found.has_app_credentials && found.expires_at && (
         <p className="mt-1 text-2xs text-warn">
           Stored exactly as pasted. Adding the App ID and Secret would let it be
           exchanged for a longer-lived one.
@@ -744,6 +746,59 @@ function DatasetRow({
             ))}
           </div>
         </div>
+      )}
+    </div>
+  );
+}
+
+
+function CredentialInput({
+  field,
+  value,
+  onChange,
+}: {
+  field: CredentialField;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  //: A long credential gets a textarea. Pasting a 400-character Meta token into
+  //: a single-line box and being unable to see either end of it is a small
+  //: misery that this avoids.
+  const long = field.key === 'token' && field.secret;
+
+  return (
+    <div>
+      <label className="label">
+        {field.label}
+        {!field.required && <span className="ml-1 font-normal text-ink-faint">optional</span>}
+      </label>
+      {long ? (
+        <textarea
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          rows={3}
+          placeholder={field.placeholder}
+          className="field resize-none font-mono text-xs"
+          autoComplete="off"
+          spellCheck={false}
+        />
+      ) : (
+        <input
+          type={field.secret ? 'password' : 'text'}
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          placeholder={field.placeholder}
+          className={clsx('field', !field.secret && 'font-mono')}
+          autoComplete={field.secret ? 'new-password' : 'off'}
+        />
+      )}
+      {field.help && (
+        <p className="mt-0.5 text-[10px] leading-relaxed text-ink-faint">{field.help}</p>
+      )}
+      {field.secret && !field.help && (
+        <p className="mt-0.5 text-[10px] text-ink-faint">
+          Encrypted before storage. It is never sent back to this screen.
+        </p>
       )}
     </div>
   );
