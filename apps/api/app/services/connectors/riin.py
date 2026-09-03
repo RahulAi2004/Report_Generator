@@ -55,6 +55,26 @@ CANDIDATE_PATHS: tuple[str, ...] = (
     "/api/v1/products", "/api/v1/orders", "/api/v1/inventory",
 )
 
+#: Where an API commonly publishes a machine-readable description of itself.
+#: Finding one of these answers every question at once -- every path, every
+#: method -- which is worth far more than another round of guessing.
+SPEC_PATHS: tuple[str, ...] = (
+    "/swagger/v1/swagger.json",
+    "/swagger/v2/swagger.json",
+    "/openapi.json",
+    "/swagger.json",
+    "/api/swagger.json",
+    "/api-docs",
+    "/api/openapi.json",
+    "/v1/swagger.json",
+    "/docs/swagger.json",
+)
+
+#: A spec can describe hundreds of paths. Only ones that plausibly return a list
+#: of records are worth offering as tables.
+SPEC_PATH_LIMIT = 60
+
+
 DATASETS: tuple[DatasetKind, ...] = (
     DatasetKind(
         key="records",
@@ -129,6 +149,25 @@ class RiinConnector(RestConnector):
         found.account_id = "riin"
         found.account_name = f"DIGI / RIIN ({self.base_url})"
 
+        # Ask the API to describe itself before guessing at it. One spec answers
+        # every question about paths at once.
+        spec_paths, spec_source = self._read_spec()
+        if spec_paths:
+            found.resources = [
+                Resource(
+                    id=path, kind="endpoint", name=path,
+                    detail={"header_form": working_form, "from_spec": spec_source},
+                )
+                for path in spec_paths
+            ]
+            found.detail = (
+                f"Authenticated with {working_form}. This API describes itself at "
+                f"{spec_source}, which lists "
+                f"{len(spec_paths)} endpoint{'' if len(spec_paths) == 1 else 's'} "
+                "that return records."
+            )
+            return found
+
         endpoints = self._find_endpoints()
         found.resources = [
             Resource(
@@ -148,11 +187,52 @@ class RiinConnector(RestConnector):
             )
         else:
             found.detail = (
-                f"Authenticated with {working_form}, but none of the paths this "
-                "connector knows about exist on this API. The key is right and the "
-                "addresses are not -- a documentation link would settle it."
+                f"Authenticated with {working_form}, but this API publishes no "
+                "description of itself and none of the paths guessed at exist on "
+                "it. The key is right and the addresses are not -- one working "
+                "endpoint URL, or a documentation link, is all that is missing."
             )
         return found
+
+    def _read_spec(self) -> tuple[list[str], str]:
+        """
+        The API's own description of itself, where it publishes one.
+
+        Only paths that take no required parameter and plausibly return a
+        collection are kept: `/api/products` is a table, `/api/products/{id}` is
+        a lookup, and offering the second as something to sync would produce an
+        endpoint that cannot be called without knowing an id first.
+        """
+        for candidate in SPEC_PATHS:
+            try:
+                document = self._request(candidate)
+            except ConnectorError:
+                continue
+            except Exception:  # noqa: BLE001 -- a probe must not break discovery
+                continue
+
+            if not isinstance(document, dict):
+                continue
+            paths = document.get("paths")
+            if not isinstance(paths, dict) or not paths:
+                continue
+
+            usable: list[str] = []
+            for path, methods in paths.items():
+                if "{" in path:
+                    continue  # needs an id we do not have
+                if not isinstance(methods, dict) or "get" not in {
+                    m.lower() for m in methods
+                }:
+                    continue
+                usable.append(path)
+                if len(usable) >= SPEC_PATH_LIMIT:
+                    break
+
+            if usable:
+                return sorted(usable), candidate
+
+        return [], ""
 
     def _find_header_form(self) -> str | None:
         """

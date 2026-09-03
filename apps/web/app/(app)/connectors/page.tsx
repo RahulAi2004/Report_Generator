@@ -361,7 +361,7 @@ function DiscoveryPanel({
             : `This token expires ${expiring.toLocaleDateString()}.`
           : found.exchanged_for_long_lived
             ? 'Exchanged for a long-lived token, and Meta reports no expiry on it.'
-            : 'Meta reports no expiry on this token.'}
+            : 'This credential does not appear to expire.'}
         {soon && ' Syncing will stop then unless it is replaced.'}
       </p>
 
@@ -411,8 +411,10 @@ function DiscoveryPanel({
 
       {found.resources.length === 0 && (
         <p className="mt-2 text-xs text-warn">
-          This token works, but reaches no ad accounts, pages or Instagram profiles.
-          It may be missing permissions, or belong to a user with no access.
+          {/* The provider's own sentence, which discovery already wrote. Saying
+              "no ad accounts or Instagram profiles" to somebody connecting a
+              supplier API is how a screen stops being believed. */}
+          {found.detail || 'These credentials work, but reach nothing this connector can sync.'}
         </p>
       )}
     </div>

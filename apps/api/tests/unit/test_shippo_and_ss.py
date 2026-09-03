@@ -520,3 +520,79 @@ def test_a_custom_base_url_replaces_the_default():
     connector = RiinConnector("k", base_url="https://other.example.com/")
     assert connector.base_url == "https://other.example.com"
     assert RiinConnector("k").base_url == "https://tshirt.riin.com"
+
+
+def test_the_api_s_own_spec_is_preferred_over_guessing(monkeypatch):
+    """
+    One spec answers every question about paths at once, which is worth far more
+    than another round of guessing -- and it is how this connector stops needing
+    documentation nobody sent.
+    """
+    connector = RiinConnector("a-long-enough-secret", header_form="X-API-Key")
+    guessed = False
+
+    def fake_request(path, params=None):
+        nonlocal guessed
+        if path == "/swagger/v1/swagger.json":
+            return {"paths": {
+                "/api/Product/GetAll": {"get": {}},
+                "/api/Order/GetAll": {"get": {}},
+                "/api/Product/{id}": {"get": {}},      # needs an id
+                "/api/Order/Create": {"post": {}},     # not a read
+            }}
+        guessed = True
+        raise ConnectorError("nothing at that address")
+
+    monkeypatch.setattr(connector, "_request", fake_request)
+    found = connector.discover()
+
+    assert [r.id for r in found.resources] == ["/api/Order/GetAll", "/api/Product/GetAll"]
+    assert "describes itself" in found.detail
+    assert guessed is False, "the spec answered, so nothing should have been guessed"
+
+
+def test_paths_needing_an_id_are_not_offered_as_tables(monkeypatch):
+    """
+    `/products` is a table; `/products/{id}` is a lookup. Offering the second
+    produces an endpoint that cannot be called without knowing an id first.
+    """
+    connector = RiinConnector("a-long-enough-secret", header_form="X-API-Key")
+    monkeypatch.setattr(connector, "_request", lambda path, params=None: (
+        {"paths": {"/a": {"get": {}}, "/a/{id}": {"get": {}}, "/b/{key}/c": {"get": {}}}}
+        if "swagger" in path else (_ for _ in ()).throw(ConnectorError("no"))
+    ))
+    assert [r.id for r in connector.discover().resources] == ["/a"]
+
+
+def test_a_spec_with_no_readable_paths_falls_through_to_guessing(monkeypatch):
+    """An empty or write-only spec is not an answer, so the search continues."""
+    connector = RiinConnector("a-long-enough-secret", header_form="X-API-Key")
+
+    def fake_request(path, params=None):
+        if "swagger" in path or "openapi" in path or "api-docs" in path:
+            return {"paths": {"/api/Thing/Create": {"post": {}}}}
+        if path == "/api/products":
+            return [{"sku": "a"}]
+        raise ConnectorError("nothing at that address")
+
+    monkeypatch.setattr(connector, "_request", fake_request)
+    found = connector.discover()
+
+    assert [r.id for r in found.resources] == ["/api/products"]
+    assert "answered and can be synced" in found.detail
+
+
+def test_finding_nothing_at_all_asks_for_one_working_url(monkeypatch):
+    """
+    The honest ending, and the smallest possible ask: not "send documentation"
+    but "one endpoint that works".
+    """
+    connector = RiinConnector("a-long-enough-secret", header_form="X-API-Key")
+    monkeypatch.setattr(
+        connector, "_request",
+        lambda *a, **k: (_ for _ in ()).throw(ConnectorError("nothing there")),
+    )
+    detail = connector.discover().detail
+
+    assert "key is right" in detail
+    assert "one working" in detail
