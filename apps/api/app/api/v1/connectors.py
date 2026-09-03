@@ -180,6 +180,7 @@ def discover(
         api_version=payload.api_version or spec.default_api_version,
         app_id=payload.app_id,
         app_secret=payload.app_secret,
+        settings={},
     )
 
     # Where a provider can trade a short-lived credential for a long one, that
@@ -254,6 +255,7 @@ def create_connector(
     client = spec.build(
         token=payload.token, api_version=version,
         app_id=payload.app_id, app_secret=payload.app_secret or "",
+        settings={},
     )
 
     # The credential that gets stored is the long-lived one wherever that is
@@ -290,6 +292,10 @@ def create_connector(
         raise HTTPException(status_code=503, detail=str(error)) from error
 
     connector = ApiConnector(
+        # Anything discovery had to work out about how to talk to this
+        # installation -- the header form, say -- is remembered, so later syncs
+        # do not repeat the search.
+        settings=_learned(client),
         provider=payload.provider,
         name=payload.name.strip(),
         token_encrypted=secret,
@@ -326,6 +332,9 @@ def refresh_discovery(
         raise HTTPException(status_code=400, detail=str(error)) from error
 
     connector.discovery = found.as_payload()
+    connector.settings = _learned(
+        connector_service.build_connector(connector)
+    ) or connector.settings
     connector.last_error = None
     db.commit()
     return connector.discovery
@@ -524,6 +533,12 @@ def preview_dataset(
 
 
 # ---------------------------------------------------------------------------
+def _learned(client) -> dict:
+    """What a client worked out during discovery and should not have to again."""
+    header_form = getattr(client, "_header_form", "")
+    return {"header_form": header_form} if header_form else {}
+
+
 def _get(db: DbSession, connector_id: str) -> ApiConnector:
     connector = db.get(ApiConnector, connector_id)
     if connector is None:

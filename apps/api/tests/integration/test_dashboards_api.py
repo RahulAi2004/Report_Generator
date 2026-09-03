@@ -65,8 +65,16 @@ def dashboard(**overrides) -> dict:
 
 # ---------------------------------------------------------------------------
 def test_preview_returns_a_number_for_every_card(client, admin):
+    """
+    That the machinery produces numbers -- not that the seed happens to be
+    recent. Over a fixed seven-day window this passed until the seeded orders
+    aged out of it, and then reported a correct NULL as a failure. All time is
+    the window that tests the code rather than the calendar.
+    """
+    definition = dashboard()
+    definition["time_range"] = {"preset": "all_time"}
     response = client.post(
-        "/api/v1/dashboards/preview", json={"definition": dashboard()}, headers=admin
+        "/api/v1/dashboards/preview", json={"definition": definition}, headers=admin
     )
     assert response.status_code == 200, response.text
     body = response.json()
@@ -163,6 +171,9 @@ def test_a_filter_reports_which_cards_it_reached(client, admin):
 def test_a_card_reading_a_table_nobody_may_see_fails_that_card_alone(client, admin):
     """One broken card must not take the dashboard down with it."""
     definition = dashboard()
+    # All time for the same reason as above: the point is that one broken card
+    # does not take the others down, not that the seed is recent.
+    definition["time_range"] = {"preset": "all_time"}
     definition["metrics"].append({
         "id": "m3", "title": "Nonsense", "table": "no_such_table",
         "field": "nothing", "aggregation": "count",
@@ -257,3 +268,25 @@ def test_a_panel_pointing_at_a_deleted_report_says_so(client, admin):
     })
     assert response.status_code == 404
     assert "deleted" in response.json()["detail"].lower()
+
+
+def test_an_empty_window_returns_no_number_rather_than_a_zero(client, admin):
+    """
+    The distinction this suite nearly lost.
+
+    A SUM over a window containing no rows is NULL, and the card reports no
+    value with no error. Rendering that as 0 would state, as a business fact,
+    that nothing was spent -- when what happened is that nothing was in range.
+    """
+    definition = dashboard()
+    definition["time_range"] = {
+        "preset": "custom", "start": "1990-01-01", "end": "1990-01-31",
+        "date_field": {"table": "sales_orders", "field": "order_date"},
+    }
+    body = client.post(
+        "/api/v1/dashboards/preview", json={"definition": definition}, headers=admin
+    ).json()
+
+    card = next(c for c in body["metrics"] if c["id"] == "m2")
+    assert card["value"] is None
+    assert card["errors"] == []

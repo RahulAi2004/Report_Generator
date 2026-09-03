@@ -21,6 +21,8 @@ from app.services.connectors.base import DatasetKind
 from app.services.connectors.meta import DATASETS as META_DATASETS
 from app.services.connectors.meta import DEFAULT_VERSION as META_VERSION
 from app.services.connectors.meta import MetaConnector
+from app.services.connectors.riin import DATASETS as RIIN_DATASETS
+from app.services.connectors.riin import RiinConnector
 from app.services.connectors.shippo import DATASETS as SHIPPO_DATASETS
 from app.services.connectors.shippo import ShippoConnector
 from app.services.connectors.ssactivewear import DATASETS as SS_DATASETS
@@ -53,7 +55,9 @@ class ProviderSpec:
     where_to_find: str
     credentials: tuple[CredentialField, ...]
     datasets: tuple[DatasetKind, ...]
-    #: Builds a client from the stored credential values.
+    #: Builds a client from the stored credential values, plus whatever the
+    #: provider has had to remember about how to talk to this particular
+    #: installation.
     build: Callable[..., object]
     default_api_version: str = ""
     #: Whether the provider can trade a short-lived credential for a long one.
@@ -135,6 +139,32 @@ PROVIDERS: dict[str, ProviderSpec] = {
         datasets=SS_DATASETS,
         build=lambda token, app_id="", **_: SSActivewearConnector(
             token, account_number=app_id
+        ),
+    ),
+    "riin": ProviderSpec(
+        key="riin",
+        label="DIGI / RIIN",
+        where_to_find=(
+            "Whoever issued the integration. The base URL defaults to "
+            "tshirt.riin.com; change it if yours differs."
+        ),
+        credentials=(
+            CredentialField(
+                key="app_id", label="Base URL", secret=False, required=False,
+                placeholder="https://tshirt.riin.com",
+                help="Leave blank to use tshirt.riin.com.",
+            ),
+            CredentialField(
+                key="token", label="Secret key", secret=True, required=True,
+                help="Sent in a header. Which header this API wants is worked out "
+                     "during discovery rather than assumed.",
+            ),
+        ),
+        datasets=RIIN_DATASETS,
+        build=lambda token, app_id="", settings=None, **_: RiinConnector(
+            token,
+            base_url=app_id or "",
+            header_form=(settings or {}).get("header_form", ""),
         ),
     ),
 }

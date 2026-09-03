@@ -96,6 +96,7 @@ def build_connector(connector: ApiConnector):
         api_version=connector.api_version or spec.default_api_version,
         app_id=connector.app_id or "",
         app_secret=app_secret,
+        settings=connector.settings or {},
     )
 
 

@@ -316,6 +316,11 @@ class ApiConnector(Base):
     api_version: Mapped[str] = mapped_column(sa.String(20), default="")
     #: What discovery last found this credential could reach.
     discovery: Mapped[dict | None] = mapped_column(sa.JSON, nullable=True)
+    #: Anything a particular provider needs remembered that is not a credential
+    #: -- which header form authenticates, a base URL that differs per customer.
+    #: Kept out of `discovery` because that is sent to the browser and this is
+    #: how requests are made.
+    settings: Mapped[dict | None] = mapped_column(sa.JSON, nullable=True)
     is_active: Mapped[bool] = mapped_column(sa.Boolean, default=True)
     #: How often its datasets are refreshed, in minutes.
     sync_interval_minutes: Mapped[int] = mapped_column(sa.Integer, default=60)
