@@ -145,8 +145,8 @@ PROVIDERS: dict[str, ProviderSpec] = {
         key="riin",
         label="DIGI / RIIN",
         where_to_find=(
-            "Whoever issued the integration. The base URL defaults to "
-            "tshirt.riin.com; change it if yours differs."
+            "Whoever issued the integration. Only the secret key is needed; the "
+            "base URL defaults to tshirt.riin.com."
         ),
         credentials=(
             CredentialField(
@@ -156,16 +156,12 @@ PROVIDERS: dict[str, ProviderSpec] = {
             ),
             CredentialField(
                 key="token", label="Secret key", secret=True, required=True,
-                help="Sent in a header. Which header this API wants is worked out "
-                     "during discovery rather than assumed.",
+                help="Each request is signed with this key over its own body, so "
+                     "the key alone is enough -- there is nothing else to paste.",
             ),
         ),
         datasets=RIIN_DATASETS,
-        build=lambda token, app_id="", settings=None, **_: RiinConnector(
-            token,
-            base_url=app_id or "",
-            header_form=(settings or {}).get("header_form", ""),
-        ),
+        build=lambda token, app_id="", **_: RiinConnector(token, base_url=app_id or ""),
     ),
 }
 

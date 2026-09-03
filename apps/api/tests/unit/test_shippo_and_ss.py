@@ -394,205 +394,126 @@ def test_the_generic_timeout_message_still_says_it_will_be_retried():
 
 
 # ---------------------------------------------------------------------------
-# DIGI / RIIN — an API nobody sent documentation for
+# DIGI / RIIN
+#
+# The first version of this connector guessed: it probed seven header forms and
+# sixteen paths for a GET API with a bearer token. The tests below it exercised
+# that guessing and are gone with it -- the real API signs each POST over its
+# own body, which no amount of probing would have found. What replaced them
+# tests the scheme that is actually in use.
 # ---------------------------------------------------------------------------
-from app.services.connectors.riin import HEADER_FORMS, RiinConnector
-
-
-def test_every_header_form_produces_exactly_one_header():
-    """Two headers, or a malformed one, fails in a way nothing here would explain."""
-    for name, template, label in HEADER_FORMS:
-        headers = RiinConnector("the-secret-key", header_form=label).auth_headers()
-        assert len(headers) == 1
-        assert headers[name] == template.format(key="the-secret-key")
-
-
-def test_bearer_is_tried_first():
-    """Much the most common, so it should not cost six probes to reach."""
-    assert HEADER_FORMS[0][2] == "Authorization: Bearer"
-    assert RiinConnector("k").auth_headers() == {"Authorization": "Bearer k"}
-
-
-def test_a_404_counts_as_authenticated(monkeypatch):
+# ---------------------------------------------------------------------------
+# The supplier API can place real orders. This connector must not be able to.
+# ---------------------------------------------------------------------------
+def test_no_write_endpoint_is_reachable(monkeypatch):
     """
-    The distinction the whole discovery rests on. A 404 means the server
-    understood who we are and has nothing at that address; treating it as a bad
-    credential is what makes people regenerate keys that were never wrong.
+    The regression that matters most in this file.
+
+    A prefix check was the first attempt and was not a guard at all: placeOrder,
+    updateOrder and closeOrder sit under the same /trade/api/interface prefix as
+    the queries. A probe written to prove the guard worked instead reached
+    placeOrder on a live supplier account, and was refused only because the body
+    had no recipient in it.
     """
-    connector = RiinConnector("a-long-enough-secret")
-    seen: list[str] = []
+    from app.services.connectors.riin import RiinConnector as R
+
+    connector = R("a-long-enough-secret")
+    called = False
+
+    def must_not_be_called(*args, **kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("a write endpoint reached the network")
+
+    monkeypatch.setattr("app.services.connectors.riin.httpx.post", must_not_be_called)
+
+    for path in (
+        "/trade/api/interface/placeOrder",
+        "/trade/api/interface/updateOrder",
+        "/trade/api/interface/closeOrder",
+        "/trade/api/interface/queryOrderInfo",   # a read, but not one we offer
+        "/anything/else",
+    ):
+        with pytest.raises(ConnectorError) as raised:
+            connector._post(path, {})
+        assert "read endpoint" in str(raised.value)
+
+    assert called is False
+
+
+def test_the_three_read_endpoints_are_allowed(monkeypatch):
+    from app.services.connectors.riin import READ_ENDPOINTS
+    from app.services.connectors.riin import RiinConnector as R
+
+    connector = R("a-long-enough-secret")
+    reached: list[str] = []
 
     class FakeResponse:
-        def __init__(self, status): self.status_code = status
+        status_code = 200
+        def json(self): return {"successful": True, "data": {"records": []}}
 
-    def fake_get(url, headers=None, timeout=None, follow_redirects=None):
-        name = next(k for k in headers if k != "Accept")
-        seen.append(name)
-        # Only X-API-Key is understood, and it has nothing at that path.
-        return FakeResponse(404 if name == "X-API-Key" else 401)
+    def fake_post(url, content=None, headers=None, timeout=None):
+        reached.append(url)
+        return FakeResponse()
 
-    monkeypatch.setattr("app.services.connectors.riin.httpx.get", fake_get)
-    assert connector._find_header_form() == "X-API-Key"
-    assert seen[0] == "Authorization"  # Bearer was tried first
+    monkeypatch.setattr("app.services.connectors.riin.httpx.post", fake_post)
+    for path in READ_ENDPOINTS.values():
+        connector._post(path, {"pageIndex": 1, "pageSize": 1})
+
+    assert len(reached) == 3
+    assert all("query" in url for url in reached)
 
 
-def test_no_working_header_form_says_to_ask_for_the_header_name(monkeypatch):
+def test_the_signature_covers_the_exact_body_that_is_sent():
     """
-    The honest ending. Rather than reporting a bad key, it says what is actually
-    unknown and what would resolve it.
+    Serialising twice would hash a string the server never receives, and the
+    request would be refused as tampered-with.
     """
+    import hashlib
+    import json
+
+    from app.services.connectors.riin import RiinConnector as R
+
+    connector = R("mysecret")
+    body = json.dumps({"pageIndex": 1, "pageSize": 1}, separators=(",", ":"))
+    headers = connector._sign(body)
+
+    assert headers["secretKey"] == "mysecret"
+    assert headers["sign"] == hashlib.md5(f"{body}::mysecret".encode()).hexdigest()
+
+
+def test_a_failure_reported_inside_a_200_is_still_a_failure(monkeypatch):
+    """
+    This supplier answers 200 and puts the failure in the body, so the status
+    code alone says almost nothing.
+    """
+    from app.services.connectors.riin import READ_ENDPOINTS
+    from app.services.connectors.riin import RiinConnector as R
+
+    connector = R("a-long-enough-secret")
+
     class FakeResponse:
-        status_code = 401
+        status_code = 200
+        def json(self): return {"successful": False, "message": "bad key", "errorCode": 401}
 
     monkeypatch.setattr(
-        "app.services.connectors.riin.httpx.get",
+        "app.services.connectors.riin.httpx.post",
         lambda *a, **k: FakeResponse(),
     )
     with pytest.raises(ConnectorError) as raised:
-        RiinConnector("a-long-enough-secret").discover()
+        connector._post(READ_ENDPOINTS["styles"], {})
+    assert "bad key" in str(raised.value)
+    assert "401" in str(raised.value)
 
-    assert "header name" in str(raised.value).lower()
-    assert "documentation" in str(raised.value).lower()
 
-
-def test_the_endpoints_that_answer_become_the_resources(monkeypatch):
+def test_records_are_found_in_both_envelopes():
     """
-    For an API whose shape nobody wrote down, "what can this reach" is a list of
-    working endpoints -- so that is what discovery returns and what a dataset is
-    then built from.
+    Catalogue calls answer with data.records; order calls answer with data as a
+    bare list. Reading only one shape yields an empty table and no error.
     """
-    connector = RiinConnector("a-long-enough-secret", header_form="X-API-Key")
+    from app.services.connectors.riin import RiinConnector as R
 
-    def fake_request(path, params=None):
-        if path in ("/api/products", "/api/orders"):
-            return [{"id": 1}]
-        raise ConnectorError("nothing at that address")
-
-    monkeypatch.setattr(connector, "_request", fake_request)
-    found = connector.discover()
-
-    assert [r.id for r in found.resources] == ["/api/products", "/api/orders"]
-    assert all(r.kind == "endpoint" for r in found.resources)
-    assert "2 endpoints" in found.detail
-
-
-def test_authenticating_but_finding_nothing_says_so_plainly(monkeypatch):
-    """
-    "The key is right and the addresses are not" is a different problem from a
-    bad key, and reporting it as one would waste somebody's afternoon.
-    """
-    connector = RiinConnector("a-long-enough-secret", header_form="X-API-Key")
-    monkeypatch.setattr(
-        connector, "_request",
-        lambda *a, **k: (_ for _ in ()).throw(ConnectorError("not found")),
-    )
-    found = connector.discover()
-
-    assert found.resources == []
-    assert "key is right" in found.detail
-    assert "addresses are not" in found.detail
-
-
-def test_a_dataset_reads_the_endpoint_it_was_given(monkeypatch):
-    connector = RiinConnector("a-long-enough-secret", header_form="X-API-Key")
-    seen: dict = {}
-
-    def fake_request(path, params=None):
-        seen["path"], seen["params"] = path, params
-        return [{"sku": "a"}]
-
-    monkeypatch.setattr(connector, "_request", fake_request)
-    page = connector.fetch("records", "/api/products")
-
-    assert seen["path"] == "/api/products"
-    assert page.rows == [{"sku": "a"}]
-    assert page.cursor is None
-
-
-def test_something_that_is_not_a_path_is_refused_by_name():
-    with pytest.raises(ConnectorError) as raised:
-        RiinConnector("a-long-enough-secret").fetch("records", "products")
-    assert "start with a slash" in str(raised.value)
-
-
-def test_a_custom_base_url_replaces_the_default():
-    """One installation per customer is normal for this kind of supplier API."""
-    connector = RiinConnector("k", base_url="https://other.example.com/")
-    assert connector.base_url == "https://other.example.com"
-    assert RiinConnector("k").base_url == "https://tshirt.riin.com"
-
-
-def test_the_api_s_own_spec_is_preferred_over_guessing(monkeypatch):
-    """
-    One spec answers every question about paths at once, which is worth far more
-    than another round of guessing -- and it is how this connector stops needing
-    documentation nobody sent.
-    """
-    connector = RiinConnector("a-long-enough-secret", header_form="X-API-Key")
-    guessed = False
-
-    def fake_request(path, params=None):
-        nonlocal guessed
-        if path == "/swagger/v1/swagger.json":
-            return {"paths": {
-                "/api/Product/GetAll": {"get": {}},
-                "/api/Order/GetAll": {"get": {}},
-                "/api/Product/{id}": {"get": {}},      # needs an id
-                "/api/Order/Create": {"post": {}},     # not a read
-            }}
-        guessed = True
-        raise ConnectorError("nothing at that address")
-
-    monkeypatch.setattr(connector, "_request", fake_request)
-    found = connector.discover()
-
-    assert [r.id for r in found.resources] == ["/api/Order/GetAll", "/api/Product/GetAll"]
-    assert "describes itself" in found.detail
-    assert guessed is False, "the spec answered, so nothing should have been guessed"
-
-
-def test_paths_needing_an_id_are_not_offered_as_tables(monkeypatch):
-    """
-    `/products` is a table; `/products/{id}` is a lookup. Offering the second
-    produces an endpoint that cannot be called without knowing an id first.
-    """
-    connector = RiinConnector("a-long-enough-secret", header_form="X-API-Key")
-    monkeypatch.setattr(connector, "_request", lambda path, params=None: (
-        {"paths": {"/a": {"get": {}}, "/a/{id}": {"get": {}}, "/b/{key}/c": {"get": {}}}}
-        if "swagger" in path else (_ for _ in ()).throw(ConnectorError("no"))
-    ))
-    assert [r.id for r in connector.discover().resources] == ["/a"]
-
-
-def test_a_spec_with_no_readable_paths_falls_through_to_guessing(monkeypatch):
-    """An empty or write-only spec is not an answer, so the search continues."""
-    connector = RiinConnector("a-long-enough-secret", header_form="X-API-Key")
-
-    def fake_request(path, params=None):
-        if "swagger" in path or "openapi" in path or "api-docs" in path:
-            return {"paths": {"/api/Thing/Create": {"post": {}}}}
-        if path == "/api/products":
-            return [{"sku": "a"}]
-        raise ConnectorError("nothing at that address")
-
-    monkeypatch.setattr(connector, "_request", fake_request)
-    found = connector.discover()
-
-    assert [r.id for r in found.resources] == ["/api/products"]
-    assert "answered and can be synced" in found.detail
-
-
-def test_finding_nothing_at_all_asks_for_one_working_url(monkeypatch):
-    """
-    The honest ending, and the smallest possible ask: not "send documentation"
-    but "one endpoint that works".
-    """
-    connector = RiinConnector("a-long-enough-secret", header_form="X-API-Key")
-    monkeypatch.setattr(
-        connector, "_request",
-        lambda *a, **k: (_ for _ in ()).throw(ConnectorError("nothing there")),
-    )
-    detail = connector.discover().detail
-
-    assert "key is right" in detail
-    assert "one working" in detail
+    assert R._records({"data": {"records": [{"a": 1}]}}) == [{"a": 1}]
+    assert R._records({"data": [{"a": 1}]}) == [{"a": 1}]
+    assert R._records({"records": [{"a": 1}]}) == [{"a": 1}]
+    assert R._records({"data": None}) == []

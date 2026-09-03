@@ -1,23 +1,29 @@
 """
-DIGI / RIIN connector.
+DIGI / RIIN supplier connector.
 
-Built without documentation, from a base URL, a secret key and the words "auth:
-header". That is a common way to be handed an integration, and guessing at it
-produces a connector that fails with "unauthorized" whether the header name is
-wrong, the path is wrong, or the key is wrong -- three different problems with
-one useless message.
+Written against the working client in BlankTex rather than against guesses. The
+first attempt probed for GET endpoints and a bearer token and found neither,
+because this API is nothing like that shape: every call is a POST carrying a
+JSON body, authenticated by two headers -- the key itself, and an MD5 of the
+body and the key together.
 
-So this one finds out instead. Discovery walks a small set of header forms and
-candidate paths, distinguishing "wrong credential" (401) from "wrong address"
-(404), and reports which combination answered. The endpoints it finds become
-the resources a dataset can be built from, so what gets synced is whatever this
-API actually serves rather than what someone assumed it would.
+That signature is why guessing could never have worked, and it is worth stating
+plainly: the credential is not a bearer token, and a request with the right key
+but an unsigned body is refused exactly like one with no key at all.
+
+The other thing this connector does deliberately is refuse to grow. The same
+API places, updates and closes real orders with a supplier. A reporting tool has
+no business holding those, so only the `query` endpoints exist here -- not as a
+convention, but as the only paths this file contains.
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 from datetime import date
+from typing import Any
 
 import httpx
 
@@ -27,80 +33,79 @@ from app.services.connectors.base import (
     Discovery,
     Page,
     Resource,
+    flatten,
 )
 from app.services.connectors.rest import RestConnector
 
 logger = logging.getLogger(__name__)
 
-PAGE_SIZE = 250
+DEFAULT_BASE_URL = "https://tshirt.riin.com"
+INTERFACE = "/trade/api/interface"
 
-#: The ways an API is commonly told to accept a key in a header, in the order
-#: they are tried. Bearer first because it is much the most common.
-HEADER_FORMS: tuple[tuple[str, str, str], ...] = (
-    ("Authorization", "Bearer {key}", "Authorization: Bearer"),
-    ("X-API-Key", "{key}", "X-API-Key"),
-    ("Auth", "{key}", "Auth"),
-    ("apikey", "{key}", "apikey"),
-    ("X-Auth-Token", "{key}", "X-Auth-Token"),
-    ("Authorization", "{key}", "Authorization (bare)"),
-    ("X-Secret-Key", "{key}", "X-Secret-Key"),
-)
+#: The supplier's catalogue endpoints page with these; 1000 is what the existing
+#: client asks for and what this API is known to serve without complaint.
+PAGE_SIZE = 1000
 
-#: Paths worth asking for on an apparel supplier's API. Being wrong about these
-#: costs one 404 each, and being right saves reading documentation nobody sent.
-CANDIDATE_PATHS: tuple[str, ...] = (
-    "/api/products", "/api/orders", "/api/inventory", "/api/customers",
-    "/api/styles", "/api/categories", "/api/invoices", "/api/shipments",
-    "/products", "/orders", "/inventory", "/styles", "/categories",
-    "/api/v1/products", "/api/v1/orders", "/api/v1/inventory",
-)
+#: Read-only by construction. The supplier's API also has placeOrder, updateOrder
+#: and closeOrder, which act on real orders with a real factory. They are absent
+#: here rather than merely unused: a reporting tool that *could* place an order
+#: is one bad code path away from placing one.
+READ_ENDPOINTS: dict[str, str] = {
+    "styles": f"{INTERFACE}/queryStyle",
+    "colors": f"{INTERFACE}/queryColor",
+    "sizes": f"{INTERFACE}/querySize",
+}
 
-#: Where an API commonly publishes a machine-readable description of itself.
-#: Finding one of these answers every question at once -- every path, every
-#: method -- which is worth far more than another round of guessing.
-SPEC_PATHS: tuple[str, ...] = (
-    "/swagger/v1/swagger.json",
-    "/swagger/v2/swagger.json",
-    "/openapi.json",
-    "/swagger.json",
-    "/api/swagger.json",
-    "/api-docs",
-    "/api/openapi.json",
-    "/v1/swagger.json",
-    "/docs/swagger.json",
-)
+#: The supplier's order status codes, as their own client maps them. Carried so
+#: a report can group by something a person recognises rather than by 1, 5, 12.
+ORDER_STATUSES: dict[int, str] = {
+    1: "Store Audit", 2: "Pending Push", 3: "Rejected", 4: "Factory Audit",
+    5: "In Production", 12: "Shipped", 13: "Closed", 14: "Refunding",
+    15: "Refunded",
+}
 
-#: A spec can describe hundreds of paths. Only ones that plausibly return a list
-#: of records are worth offering as tables.
-SPEC_PATH_LIMIT = 60
+#: The only paths this connector may request, by exact match. Anything the
+#: supplier's API can do to an order is absent from this set, and a prefix would
+#: not have been enough -- the write endpoints share one with the read ones.
+_ALLOWED_PATHS: frozenset[str] = frozenset(READ_ENDPOINTS.values())
 
 
 DATASETS: tuple[DatasetKind, ...] = (
     DatasetKind(
-        key="records",
-        label="Records from an endpoint",
-        description=(
-            "Whatever one of this API's endpoints returns, as a table. The "
-            "endpoint is chosen from the ones discovery found."
-        ),
-        # The resource *is* the endpoint, which is what makes this work for an
-        # API whose shape nobody has written down.
-        resource_kind="endpoint",
-        time_series=True,
+        key="styles",
+        label="Catalogue styles",
+        description="Every style the supplier offers: code, name, craft types and images.",
+        resource_kind="account",
+        key_columns=("styleCode",),
+    ),
+    DatasetKind(
+        key="colors",
+        label="Catalogue colours",
+        description="Colour codes and names available across the catalogue.",
+        resource_kind="account",
+        key_columns=("colorCode",),
+    ),
+    DatasetKind(
+        key="sizes",
+        label="Catalogue sizes",
+        description="Size codes and names available across the catalogue.",
+        resource_kind="account",
+        key_columns=("sizeCode",),
     ),
 )
 
 
 class RiinConnector(RestConnector):
     provider = "riin"
-    base_url = "https://tshirt.riin.com"
+    base_url = DEFAULT_BASE_URL
     datasets_offered = DATASETS
 
-    def __init__(self, token: str, header_form: str = "", base_url: str = "", **kwargs):
+    #: The supplier is slow under load and their own client allows ninety
+    #: seconds. Calling it hung sooner produces a failure that is not one.
+    SLOW_TIMEOUT = 90.0
+
+    def __init__(self, token: str, base_url: str = "", **kwargs):
         super().__init__(token, **kwargs)
-        #: Which header form is known to work, once discovery has found one.
-        #: Stored so every later request uses it rather than searching again.
-        self._header_form = header_form or ""
         if base_url:
             self.base_url = base_url.rstrip("/")
 
@@ -109,173 +114,150 @@ class RiinConnector(RestConnector):
 
     # -- auth ---------------------------------------------------------------
     def auth_headers(self) -> dict[str, str]:
-        name, template, _ = self._form(self._header_form)
-        return {name: template.format(key=self._token)}
+        """
+        Not used: this API signs each request over its own body, so the headers
+        cannot be built without knowing what is being sent.
+        """
+        raise NotImplementedError("RIIN signs per request; see _sign.")
 
-    @staticmethod
-    def _form(label: str) -> tuple[str, str, str]:
-        for form in HEADER_FORMS:
-            if form[2] == label:
-                return form
-        return HEADER_FORMS[0]
+    def _sign(self, body_text: str) -> dict[str, str]:
+        """
+        The two headers this API wants.
+
+        The signature covers the exact body bytes that are sent, so the same
+        string has to be both hashed and posted -- serialising twice would
+        produce a hash of something the server never saw.
+        """
+        digest = hashlib.md5(
+            f"{body_text}::{self._token}".encode("utf-8")
+        ).hexdigest()
+        return {
+            "Content-Type": "application/json",
+            "secretKey": self._token,
+            "sign": digest,
+        }
 
     def _redact(self, text: str) -> str:
-        """Whatever header form is in use, the key is inside it."""
-        cleaned = super()._redact(text)
-        if len(self._token) >= self.MIN_REDACTABLE:
-            cleaned = cleaned.replace(f"Bearer {self._token}", "[the key]")
-        return cleaned
+        return super()._redact(text)
+
+    # -- HTTP ---------------------------------------------------------------
+    def _post(self, path: str, body: dict[str, Any]) -> dict:
+        if path not in _ALLOWED_PATHS:
+            # An allowlist of exact paths, not a prefix.
+            #
+            # A prefix check was the first attempt and it was not a guard at all:
+            # placeOrder, updateOrder and closeOrder live under the same prefix
+            # as the query endpoints, and a probe written to prove the guard
+            # worked instead reached placeOrder on a live supplier account. It
+            # was rejected for having no recipient, so nothing was created --
+            # but nothing about the code had stopped it.
+            raise ConnectorError(
+                f"'{path}' is not a read endpoint. This connector can only call "
+                f"{', '.join(sorted(_ALLOWED_PATHS))}."
+            )
+
+        body_text = json.dumps(body, separators=(",", ":"))
+        try:
+            response = httpx.post(
+                f"{self.base_url}{path}",
+                content=body_text.encode("utf-8"),
+                headers=self._sign(body_text),
+                timeout=self.SLOW_TIMEOUT,
+            )
+        except httpx.TimeoutException as error:
+            raise ConnectorError(
+                f"The supplier did not answer within {int(self.SLOW_TIMEOUT)} seconds. "
+                "This will be retried.",
+                retryable=True,
+            ) from error
+        except httpx.HTTPError as error:
+            raise ConnectorError(
+                f"Could not reach the supplier: {self._redact(str(error))}",
+                retryable=True,
+            ) from error
+
+        if response.status_code >= 500:
+            raise ConnectorError(
+                "The supplier's API is having trouble at their end. This will be "
+                "retried.",
+                retryable=True,
+            )
+
+        try:
+            result = response.json()
+        except ValueError as error:
+            raise ConnectorError(
+                f"The supplier returned HTTP {response.status_code} and not JSON. "
+                "That usually means the base URL is wrong."
+            ) from error
+
+        # The supplier reports failure in the body with a 200, so the status
+        # code alone says almost nothing.
+        if not (result.get("successful") or result.get("success")):
+            message = self._redact(str(result.get("message") or "")).strip()
+            code = result.get("errorCode")
+            if not message:
+                message = "The supplier rejected the request."
+            raise ConnectorError(
+                f"{message}{f' (code {code})' if code else ''}"
+            )
+        return result
+
+    @staticmethod
+    def _records(result: dict) -> list[dict]:
+        """
+        The rows out of the supplier's envelope.
+
+        Catalogue calls answer with `data.records`; order calls answer with
+        `data` as a bare list. Both shapes are handled because getting it wrong
+        yields an empty table and no error at all.
+        """
+        data = result.get("data")
+        if isinstance(data, dict) and isinstance(data.get("records"), list):
+            return [flatten(row) for row in data["records"] if isinstance(row, dict)]
+        if isinstance(data, list):
+            return [flatten(row) for row in data if isinstance(row, dict)]
+        if isinstance(result.get("records"), list):
+            return [flatten(row) for row in result["records"] if isinstance(row, dict)]
+        return []
 
     # -- discovery ----------------------------------------------------------
     def discover(self) -> Discovery:
         """
-        Work out how this API wants to be spoken to, then what it serves.
+        Prove the key and the signature work, with the cheapest call there is.
 
-        Two questions in order, because they have different answers: which
-        header form authenticates, and which paths exist. Asking them together
-        is how "unauthorized" and "not found" get confused for each other.
+        One row rather than a page: discovery should cost the supplier nothing,
+        and a single record proves the credential, the signature and the base
+        URL all at once.
         """
         found = Discovery()
-        working_form = self._header_form or self._find_header_form()
-
-        if working_form is None:
-            raise ConnectorError(
-                "None of the usual header forms were accepted. This API wants the "
-                "key somewhere else -- ask whoever issued it for the exact header "
-                "name, or for a documentation link, and it can be added."
-            )
-
-        self._header_form = working_form
         found.account_id = "riin"
         found.account_name = f"DIGI / RIIN ({self.base_url})"
 
-        # Ask the API to describe itself before guessing at it. One spec answers
-        # every question about paths at once.
-        spec_paths, spec_source = self._read_spec()
-        if spec_paths:
-            found.resources = [
-                Resource(
-                    id=path, kind="endpoint", name=path,
-                    detail={"header_form": working_form, "from_spec": spec_source},
-                )
-                for path in spec_paths
-            ]
-            found.detail = (
-                f"Authenticated with {working_form}. This API describes itself at "
-                f"{spec_source}, which lists "
-                f"{len(spec_paths)} endpoint{'' if len(spec_paths) == 1 else 's'} "
-                "that return records."
-            )
-            return found
+        result = self._post(READ_ENDPOINTS["styles"], {"pageIndex": 1, "pageSize": 1})
+        total = self._total(result)
 
-        endpoints = self._find_endpoints()
-        found.resources = [
-            Resource(
-                id=path,
-                kind="endpoint",
-                name=path,
-                detail={"rows_in_sample": count, "header_form": working_form},
-            )
-            for path, count in endpoints
-        ]
-
-        if endpoints:
-            found.detail = (
-                f"Authenticated with {working_form}. "
-                f"{len(endpoints)} endpoint{'' if len(endpoints) == 1 else 's'} "
-                "answered and can be synced."
-            )
-        else:
-            found.detail = (
-                f"Authenticated with {working_form}, but this API publishes no "
-                "description of itself and none of the paths guessed at exist on "
-                "it. The key is right and the addresses are not -- one working "
-                "endpoint URL, or a documentation link, is all that is missing."
-            )
+        found.resources = [Resource(
+            id="account",
+            kind="account",
+            name=found.account_name,
+            detail={"styles_in_catalogue": total},
+        )]
+        found.detail = (
+            "Authenticated with the signed secret key. The catalogue answered"
+            + (f" with {total} styles." if total is not None else ".")
+        )
         return found
 
-    def _read_spec(self) -> tuple[list[str], str]:
-        """
-        The API's own description of itself, where it publishes one.
-
-        Only paths that take no required parameter and plausibly return a
-        collection are kept: `/api/products` is a table, `/api/products/{id}` is
-        a lookup, and offering the second as something to sync would produce an
-        endpoint that cannot be called without knowing an id first.
-        """
-        for candidate in SPEC_PATHS:
-            try:
-                document = self._request(candidate)
-            except ConnectorError:
-                continue
-            except Exception:  # noqa: BLE001 -- a probe must not break discovery
-                continue
-
-            if not isinstance(document, dict):
-                continue
-            paths = document.get("paths")
-            if not isinstance(paths, dict) or not paths:
-                continue
-
-            usable: list[str] = []
-            for path, methods in paths.items():
-                if "{" in path:
-                    continue  # needs an id we do not have
-                if not isinstance(methods, dict) or "get" not in {
-                    m.lower() for m in methods
-                }:
-                    continue
-                usable.append(path)
-                if len(usable) >= SPEC_PATH_LIMIT:
-                    break
-
-            if usable:
-                return sorted(usable), candidate
-
-        return [], ""
-
-    def _find_header_form(self) -> str | None:
-        """
-        Which header this API accepts.
-
-        A 404 counts as authenticated: the server understood who we are and
-        merely has nothing at that address. Treating it as a failed credential
-        is what makes people regenerate keys that were never the problem.
-        """
-        probe = CANDIDATE_PATHS[0]
-        for name, template, label in HEADER_FORMS:
-            try:
-                httpx_response = httpx.get(
-                    f"{self.base_url}{probe}",
-                    headers={
-                        "Accept": "application/json",
-                        name: template.format(key=self._token),
-                    },
-                    timeout=self._timeout,
-                    follow_redirects=True,
-                )
-            except httpx.HTTPError:
-                continue
-
-            if httpx_response.status_code in (401, 403):
-                continue  # this header form was not understood
-            if httpx_response.status_code < 500:
-                return label
+    @staticmethod
+    def _total(result: dict) -> int | None:
+        data = result.get("data")
+        if isinstance(data, dict):
+            for key in ("total", "totalCount", "totalRecords", "count"):
+                value = data.get(key)
+                if isinstance(value, int):
+                    return value
         return None
-
-    def _find_endpoints(self) -> list[tuple[str, int]]:
-        """Which of the candidate paths return something."""
-        found: list[tuple[str, int]] = []
-        for path in CANDIDATE_PATHS:
-            try:
-                rows = self._rows(self._request(path, {"limit": 1}))
-            except ConnectorError:
-                continue
-            except Exception:  # noqa: BLE001 -- one bad path must not stop the walk
-                logger.debug("Probe failed for %s", path, exc_info=True)
-                continue
-            found.append((path, len(rows)))
-        return found
 
     # -- fetching -----------------------------------------------------------
     def fetch(
@@ -286,23 +268,17 @@ class RiinConnector(RestConnector):
         until: date | None = None,
         cursor: str | None = None,
     ) -> Page:
-        if dataset != "records":
-            raise ConnectorError(f"DIGI / RIIN connector has no dataset called '{dataset}'.")
-        if not resource_id.startswith("/"):
+        path = READ_ENDPOINTS.get(dataset)
+        if path is None:
             raise ConnectorError(
-                f"'{resource_id}' is not an endpoint path. It should start with a slash."
+                f"DIGI / RIIN connector has no dataset called '{dataset}'."
             )
 
-        # Offset paging, which is the common default. If this API pages some
-        # other way the first sync returns one page and stops, which is visible
-        # in the row count rather than silently wrong.
-        offset = int(cursor) if cursor and cursor.isdigit() else 0
-        params: dict[str, object] = {"limit": PAGE_SIZE, "offset": offset}
-        if since:
-            params["startDate"] = since.isoformat()
-        if until:
-            params["endDate"] = until.isoformat()
+        page_index = int(cursor) if cursor and cursor.isdigit() else 1
+        result = self._post(path, {"pageIndex": page_index, "pageSize": PAGE_SIZE})
+        rows = self._records(result)
 
-        rows = self._rows(self._request(resource_id, params))
-        next_offset = offset + len(rows) if len(rows) >= PAGE_SIZE else None
-        return Page(rows=rows, cursor=str(next_offset) if next_offset else None)
+        # A short page is the last one. The supplier reports a total as well,
+        # but a short page is true whether or not that field is present.
+        next_index = page_index + 1 if len(rows) >= PAGE_SIZE else None
+        return Page(rows=rows, cursor=str(next_index) if next_index else None)
