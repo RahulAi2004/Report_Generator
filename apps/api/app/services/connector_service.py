@@ -380,9 +380,14 @@ def as_table_meta(dataset: ConnectorDataset, provider: str) -> TableMeta:
         category=f"{_provider_label(provider)} API",
         display_name=dataset.display_name,
         description=(
-            f"{dataset.resource_name} — last refreshed "
-            f"{dataset.last_synced_at.isoformat(sep=' ', timespec='minutes')}"
-            if dataset.last_synced_at else f"{dataset.resource_name} — not yet refreshed"
+            # The provider's name is here as well as in the category, because
+            # this is what a search reads and it is what somebody looking for
+            # "the RIIN data" will type.
+            f"From {_provider_label(provider)}. {dataset.resource_name} — last "
+            f"refreshed {dataset.last_synced_at.isoformat(sep=' ', timespec='minutes')}"
+            if dataset.last_synced_at
+            else f"From {_provider_label(provider)}. {dataset.resource_name} — "
+                 "not yet refreshed"
         ),
         estimated_rows=dataset.row_count,
         columns=tuple(

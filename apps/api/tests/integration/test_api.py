@@ -836,3 +836,27 @@ def test_reports_can_be_filtered_by_module(client, admin):
     finally:
         client.delete(f"/api/v1/reports/{crm['id']}", headers=admin)
         client.delete(f"/api/v1/reports/{sales['id']}", headers=admin)
+
+
+def test_searching_data_sources_reads_the_category_too(client, admin):
+    """
+    Somebody who knows where data came from searches for that, not for the
+    table's own name. The tables synced from a supplier are called "Catalogue
+    styles"; it is the category that carries the supplier's name.
+    """
+    body = client.get("/api/v1/schema/tables", headers=admin).json()
+    categories = [c["name"] for c in body["categories"] if c["tables"]]
+    assert categories, "no categories to search for"
+
+    term = categories[0].split()[0]
+    found = client.get(
+        f"/api/v1/schema/tables?search={term}", headers=admin
+    ).json()
+
+    assert found["total_tables"] > 0, f"searching for the category '{term}' found nothing"
+
+
+def test_a_search_matching_nothing_still_returns_cleanly(client, admin):
+    body = client.get("/api/v1/schema/tables?search=zzzznotathing", headers=admin).json()
+    assert body["total_tables"] == 0
+    assert body["categories"] == []

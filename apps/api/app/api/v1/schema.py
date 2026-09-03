@@ -80,10 +80,19 @@ def list_tables(
 
     tables = registry.tables
     if search:
+        # Name, label, category and description together.
+        #
+        # Searching only the name and label meant somebody who knew the data
+        # came from a particular supplier searched for the supplier and found
+        # nothing -- the tables were called "Catalogue styles" and it was the
+        # category heading that carried the name they were looking for.
         needle = search.lower()
         tables = [
             table for table in tables
-            if needle in table.name.lower() or needle in table.label.lower()
+            if needle in table.name.lower()
+            or needle in table.label.lower()
+            or needle in table.category.lower()
+            or needle in (table.description or "").lower()
         ]
     if category:
         tables = [table for table in tables if table.category == category]
