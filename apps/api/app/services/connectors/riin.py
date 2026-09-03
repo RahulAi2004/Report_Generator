@@ -240,8 +240,12 @@ class RiinConnector(RestConnector):
         found.resources = [Resource(
             id="account",
             kind="account",
-            name=found.account_name,
-            detail={"styles_in_catalogue": total},
+            # Short on purpose. This name is used to name the tables that get
+            # created, and putting a URL in it produced identifiers like
+            # api_catalogue_styles_digi_riin_https_tshirt_riin_com -- present in
+            # the field list, and unfindable in it.
+            name="Supplier catalogue",
+            detail={"styles_in_catalogue": total, "base_url": self.base_url},
         )]
         found.detail = (
             "Authenticated with the signed secret key. The catalogue answered"

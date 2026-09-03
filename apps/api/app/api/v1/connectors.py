@@ -439,7 +439,7 @@ def add_dataset(
         resource_name=payload.resource_name,
         display_name=(
             payload.display_name.strip()
-            or f"{kind.label} — {payload.resource_name or payload.resource_id}"
+            or _default_name(kind.label, payload.resource_name, payload.resource_id)
         ),
         lookback_days=payload.lookback_days,
         status="pending",
@@ -533,6 +533,20 @@ def preview_dataset(
 
 
 # ---------------------------------------------------------------------------
+def _default_name(label: str, resource_name: str, resource_id: str) -> str:
+    """
+    What the table is called by default.
+
+    The resource is appended only when it distinguishes something -- one Meta
+    connection has several ad accounts, but a supplier connection has one
+    catalogue, and "Catalogue styles - Supplier catalogue" says nothing twice.
+    """
+    resource = (resource_name or resource_id or "").strip()
+    if not resource or resource.lower() in label.lower():
+        return label
+    return f"{label} — {resource}"
+
+
 def _learned(client) -> dict:
     """What a client worked out during discovery and should not have to again."""
     header_form = getattr(client, "_header_form", "")

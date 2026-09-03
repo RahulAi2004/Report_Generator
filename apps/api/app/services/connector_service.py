@@ -140,6 +140,20 @@ def _sa_table(dataset: ConnectorDataset, metadata: sa.MetaData | None = None) ->
     )
 
 
+def _humanise(name: str) -> str:
+    """
+    A column name a person would write.
+
+    APIs return camelCase far more often than snake_case, and title-casing that
+    gives "Stylecode" and "Crafttype" -- names nobody would choose and nobody
+    reads twice. Splitting on the case change gives "Style Code".
+    """
+    import re
+
+    spaced = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", name.replace("_", " "))
+    return " ".join(word for word in spaced.split()).strip().title() or name
+
+
 def infer_columns(rows: list[dict]) -> list[dict]:
     """
     The schema, from what actually arrived.
@@ -166,7 +180,7 @@ def infer_columns(rows: list[dict]) -> list[dict]:
         data_type = infer_type([v for v in values if v != ""]) if any(values) else DataType.TEXT
         columns.append({
             "name": candidate,
-            "label": name.replace("_", " ").strip().title(),
+            "label": _humanise(name),
             "data_type": data_type.value,
             "nullable": True,
             "source": name,
@@ -336,6 +350,17 @@ def drop_dataset(session: Session, dataset: ConnectorDataset) -> None:
 # ---------------------------------------------------------------------------
 # Making them visible to the report builder
 # ---------------------------------------------------------------------------
+def _provider_label(provider: str) -> str:
+    """
+    The provider's own name, not a guess made from its key.
+
+    `provider.title()` turned "riin" into "Riin" and "ssactivewear" into
+    "Ssactivewear", which is not what anybody calls them.
+    """
+    spec = provider_registry.spec(provider)
+    return spec.label if spec else provider.title()
+
+
 def as_table_meta(dataset: ConnectorDataset, provider: str) -> TableMeta:
     """
     A connector dataset as an ordinary table.
@@ -343,13 +368,16 @@ def as_table_meta(dataset: ConnectorDataset, provider: str) -> TableMeta:
     Being a normal TableMeta is the whole trick: resolution, the join planner,
     the compiler and the hybrid executor need to know nothing about APIs.
     """
-    name = f"api_{safe_identifier(dataset.display_name) or dataset.id}"
+    # Bounded: a display name carrying a URL once produced a 52-character
+    # identifier that was truncated everywhere it appeared.
+    stem = safe_identifier(dataset.display_name)[:40].rstrip("_")
+    name = f"api_{stem or dataset.id}"
     return TableMeta(
         name=name,
         schema=CONNECTOR_SCHEMA,
         physical_name=dataset.physical_table,
         kind="upload",  # executed locally, exactly like an uploaded file
-        category=f"{provider.title()} API",
+        category=f"{_provider_label(provider)} API",
         display_name=dataset.display_name,
         description=(
             f"{dataset.resource_name} — last refreshed "

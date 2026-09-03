@@ -517,3 +517,47 @@ def test_records_are_found_in_both_envelopes():
     assert R._records({"data": [{"a": 1}]}) == [{"a": 1}]
     assert R._records({"records": [{"a": 1}]}) == [{"a": 1}]
     assert R._records({"data": None}) == []
+
+
+# ---------------------------------------------------------------------------
+# Names people can find
+# ---------------------------------------------------------------------------
+def test_camel_case_column_names_become_readable_labels():
+    """
+    APIs return camelCase far more often than snake_case, and title-casing that
+    gives "Stylecode" -- a name nobody would choose and nobody reads twice.
+    """
+    from app.services.connector_service import _humanise
+
+    assert _humanise("styleCode") == "Style Code"
+    assert _humanise("craftType") == "Craft Type"
+    assert _humanise("colorName") == "Color Name"
+    assert _humanise("inline_link_clicks") == "Inline Link Clicks"
+    assert _humanise("spend") == "Spend"
+    assert _humanise("date_start") == "Date Start"
+
+
+def test_a_provider_is_called_what_it_calls_itself():
+    """provider.title() turned "riin" into "Riin" and "ssactivewear" into
+    "Ssactivewear", which is not what anybody calls them."""
+    from app.services.connector_service import _provider_label
+
+    assert _provider_label("riin") == "DIGI / RIIN"
+    assert _provider_label("ssactivewear") == "S&S Activewear"
+    assert _provider_label("meta") == "Meta (Facebook & Instagram)"
+
+
+def test_the_default_table_name_does_not_repeat_itself():
+    """
+    A Meta connection has several ad accounts worth naming apart; a supplier
+    connection has one catalogue, and saying so twice helps nobody.
+    """
+    from app.api.v1.connectors import _default_name
+
+    assert _default_name("Catalogue styles", "Supplier catalogue", "account") \
+        == "Catalogue styles — Supplier catalogue"
+    assert _default_name("Ads Insights (daily)", "decoinks", "act_1") \
+        == "Ads Insights (daily) — decoinks"
+    # Nothing to distinguish, so nothing appended.
+    assert _default_name("Catalogue styles", "", "") == "Catalogue styles"
+    assert _default_name("Catalogue styles", "catalogue styles", "x") == "Catalogue styles"
