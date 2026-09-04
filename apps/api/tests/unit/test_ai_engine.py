@@ -264,3 +264,62 @@ def test_a_json_array_is_not_an_answer():
     """The shape is agreed; a list where an object belongs is a failure."""
     with pytest.raises(AIError):
         OpenAICompatibleProvider._as_json(json.dumps([1, 2, 3]))
+
+
+# ---------------------------------------------------------------------------
+# The schema the model is decoded against must match the IR
+# ---------------------------------------------------------------------------
+def test_the_schema_given_to_the_model_matches_what_the_ir_accepts():
+    """
+    The regression this exists for: sort_by was declared as an object when the
+    IR takes a list. The model returned exactly what the schema asked for and
+    the compiler refused it -- a mistake that looks like the model's and is not.
+    """
+    from app.domain.report.ir import ReportDefinition
+
+    schema = context.definition_schema()
+    properties = schema["properties"]
+
+    # Every field named in the schema is a field the IR actually has.
+    unknown = set(properties) - set(ReportDefinition.model_fields)
+    assert not unknown, f"schema offers fields the IR does not accept: {unknown}"
+
+    # And the shapes agree where it is easy to get wrong.
+    assert properties["sort_by"]["type"] == "array"
+    assert properties["group_by"]["type"] == "array"
+    assert properties["columns"]["type"] == "array"
+    assert properties["tables"]["type"] == "array"
+    assert properties["primary_table"]["type"] == "string"
+
+
+def test_a_definition_built_to_that_schema_compiles(registry):
+    """
+    The schema and the compiler agreeing, demonstrated rather than asserted:
+    a minimal document shaped exactly as the schema describes must build.
+    """
+    stubbed = {
+        "primary_table": "sales_orders",
+        "tables": ["sales_orders", "customers"],
+        "columns": [
+            {"id": "c1", "table": "customers", "field": "customer_name"},
+            {"id": "c2", "table": "sales_orders", "field": "total_amount",
+             "aggregation": "sum", "display_name": "Total"},
+        ],
+        "group_by": [{"table": "customers", "field": "customer_name"}],
+        "sort_by": [{"column_id": "c2", "direction": "desc"}],
+        "row_limit": 50,
+    }
+    runnable, problems, _ = engine._check(registry, stubbed)
+    assert runnable is True, problems
+
+
+def test_the_prompt_names_the_fields_and_rules_out_the_wrong_ones():
+    """
+    A model with its own idea of what a report looks like will use it. The
+    natural vocabulary -- dimensions and metrics -- is worth ruling out by name.
+    """
+    prompt = context.SYSTEM_PROMPT
+    for required in ("primary_table", "columns", "group_by", "sort_by"):
+        assert required in prompt
+    for wrong in ("dimensions", "metrics", "alias"):
+        assert wrong in prompt, f"the prompt should name '{wrong}' as wrong"

@@ -134,13 +134,18 @@ def definition_schema() -> dict:
             "tables": {"type": "array", "items": {"type": "string"}},
             "columns": {"type": "array", "items": column},
             "group_by": {"type": "array", "items": table_field},
+            # A list, not one object. Declared wrongly the first time, and the
+            # model dutifully returned exactly what the schema asked for.
             "sort_by": {
-                "type": "object",
-                "properties": {
-                    "column_id": {"type": "string"},
-                    "direction": {"type": "string", "enum": ["asc", "desc"]},
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "column_id": {"type": "string"},
+                        "direction": {"type": "string", "enum": ["asc", "desc"]},
+                    },
+                    "required": ["column_id"],
                 },
-                "required": ["column_id"],
             },
             "row_limit": {"type": "integer"},
         },
@@ -202,7 +207,8 @@ The JSON field names are fixed and are not negotiable:
                   aggregation and display_name. REQUIRED.
   group_by        a list of {table, field}. Every non-aggregated column must
                   appear here when anything is aggregated.
-  sort_by         {column_id, direction}, referring to a column by its id.
+  sort_by         a LIST of {column_id, direction}, each referring to a
+                  column by its id.
   row_limit       a number.
 
 Do not invent other names for these. In particular there is no "dimensions",
