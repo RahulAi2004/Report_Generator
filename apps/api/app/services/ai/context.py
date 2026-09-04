@@ -99,6 +99,92 @@ def aggregations_note() -> str:
     )
 
 
+def definition_schema() -> dict:
+    """
+    The report IR as JSON Schema, for providers that can decode against one.
+
+    Hand-written rather than taken from Pydantic: the generated schema carries
+    every optional field, every $ref and every enum in the IR, which is large
+    enough that some providers refuse it outright. This is the part a model
+    needs to get right, and nothing else.
+    """
+    column = {
+        "type": "object",
+        "properties": {
+            "id": {"type": "string"},
+            "table": {"type": "string"},
+            "field": {"type": "string"},
+            "display_name": {"type": "string"},
+            "aggregation": {
+                "type": "string",
+                "enum": ["none", "count", "count_distinct", "sum", "avg", "min", "max"],
+            },
+        },
+        "required": ["id", "table", "field"],
+    }
+    table_field = {
+        "type": "object",
+        "properties": {"table": {"type": "string"}, "field": {"type": "string"}},
+        "required": ["table", "field"],
+    }
+    return {
+        "type": "object",
+        "properties": {
+            "primary_table": {"type": "string"},
+            "tables": {"type": "array", "items": {"type": "string"}},
+            "columns": {"type": "array", "items": column},
+            "group_by": {"type": "array", "items": table_field},
+            "sort_by": {
+                "type": "object",
+                "properties": {
+                    "column_id": {"type": "string"},
+                    "direction": {"type": "string", "enum": ["asc", "desc"]},
+                },
+                "required": ["column_id"],
+            },
+            "row_limit": {"type": "integer"},
+        },
+        "required": ["primary_table", "tables", "columns"],
+    }
+
+
+def suggestions_schema() -> dict:
+    """Several reports, each with the title and reason a person reads first."""
+    return {
+        "type": "object",
+        "properties": {
+            "suggestions": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string"},
+                        "why": {"type": "string"},
+                        "definition": definition_schema(),
+                    },
+                    "required": ["title", "definition"],
+                },
+            }
+        },
+        "required": ["suggestions"],
+    }
+
+
+def answer_schema() -> dict:
+    """One report, with what the model had to assume to build it."""
+    return {
+        "type": "object",
+        "properties": {
+            "title": {"type": "string"},
+            "why": {"type": "string"},
+            "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+            "assumptions": {"type": "array", "items": {"type": "string"}},
+            "definition": definition_schema(),
+        },
+        "required": ["title", "definition"],
+    }
+
+
 SYSTEM_PROMPT = """You design reports for a business intelligence tool.
 
 You are given the shape of a company's database: its tables, their columns and
@@ -107,6 +193,23 @@ the relationships between them. You never see the data itself.
 You answer only with JSON describing reports, in the format asked for. You do
 not write SQL, and there is nowhere to put SQL if you did -- the JSON you return
 is compiled by the tool itself.
+
+The JSON field names are fixed and are not negotiable:
+
+  primary_table   one table name, the one the report is rooted at. REQUIRED.
+  tables          every table used, including the primary one. REQUIRED.
+  columns         a list. Each has id, table, field, and optionally
+                  aggregation and display_name. REQUIRED.
+  group_by        a list of {table, field}. Every non-aggregated column must
+                  appear here when anything is aggregated.
+  sort_by         {column_id, direction}, referring to a column by its id.
+  row_limit       a number.
+
+Do not invent other names for these. In particular there is no "dimensions",
+no "metrics", no "column" and no "alias" -- a grouped attribute and an
+aggregated measure are both entries in "columns", told apart by whether they
+carry an aggregation. Use "field", not "column". Use "display_name", not
+"alias". Omitting primary_table makes the report unusable.
 
 Rules that matter:
 - Only use table and column names that appear in the schema you were given.

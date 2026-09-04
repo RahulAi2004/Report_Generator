@@ -192,6 +192,13 @@ class OpenAICompatibleProvider:
             ) from error
 
         if response.status_code >= 400:
+            # Not every model accepts constrained decoding, and the ones that
+            # refuse it say so as a 400. Asking again without the constraint is
+            # better than telling somebody their key is broken -- the prompt
+            # names the fields too, and the answer is validated either way.
+            if schema is not None and self._rejected_the_schema(response):
+                logger.info("Provider refused json_schema; retrying without it")
+                return self.complete(system, user, schema=None)
             raise self._explain(response)
 
         try:
@@ -235,6 +242,15 @@ class OpenAICompatibleProvider:
         if not isinstance(parsed, dict):
             raise AIError("The AI's answer was not in the expected shape.")
         return parsed
+
+    @staticmethod
+    def _rejected_the_schema(response: httpx.Response) -> bool:
+        try:
+            body = response.json()
+        except ValueError:
+            return False
+        message = str(body.get("error", {}) if isinstance(body, dict) else body).lower()
+        return "response_format" in message or "json_schema" in message
 
     def _redact(self, text: str) -> str:
         key = self._config.api_key

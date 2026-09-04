@@ -134,7 +134,9 @@ def suggest(
         + f"SCHEMA\n------\n{schema}"
     )
 
-    answer = provider.complete(context.SYSTEM_PROMPT, user)
+    answer = provider.complete(
+        context.SYSTEM_PROMPT, user, schema=context.suggestions_schema()
+    )
     raw = answer.get("suggestions")
     if not isinstance(raw, list):
         raise AIError("The AI did not return a list of suggestions.")
@@ -181,7 +183,9 @@ def ask(
         f"SCHEMA\n------\n{schema}"
     )
 
-    answer = provider.complete(context.SYSTEM_PROMPT, user)
+    answer = provider.complete(
+        context.SYSTEM_PROMPT, user, schema=context.answer_schema()
+    )
     raw = answer.get("definition")
     if not isinstance(raw, dict):
         raise AIError(
