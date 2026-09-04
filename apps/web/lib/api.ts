@@ -251,6 +251,9 @@ export const api = {
   }) => request<AiSettings>('/ai/settings', {
     method: 'PUT', body: JSON.stringify(body),
   }),
+  /** Which models the key can actually use, asked of the provider. */
+  aiModels: (body: { base_url?: string; api_key?: string }) =>
+    post<{ models: string[]; base_url: string }>('/ai/models', body),
   /** Exactly what would be sent to the provider, so it can be read rather than trusted. */
   aiContext: () => request<AiContext>('/ai/context'),
   aiSuggest: (body: { tables?: string[]; interest?: string }) =>

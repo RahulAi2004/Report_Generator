@@ -3,8 +3,9 @@ Talking to a language model.
 
 Kept behind a small interface because the provider is a deployment decision, not
 an architectural one -- the AI layer above this cares only that it gets JSON
-back. Grok is what this installation uses; its API is OpenAI-compatible, so the
-same class serves any endpoint that speaks that dialect.
+back. Groq is what this installation uses; its API is OpenAI-compatible, so the
+same class serves any endpoint that speaks that dialect, including OpenAI
+itself, together with vLLM and Ollama behind a compatible shim.
 
 The key lives encrypted in the metadata database like every other credential
 here, and is never returned by any endpoint.
@@ -30,9 +31,12 @@ logger = logging.getLogger(__name__)
 #: Where the AI provider's configuration lives. One row, admin-managed.
 SETTING_KEY = "ai_provider"
 
-#: Grok speaks the OpenAI chat dialect, so this default serves both.
-DEFAULT_BASE_URL = "https://api.x.ai/v1"
-DEFAULT_MODEL = "grok-3"
+#: Groq speaks the OpenAI chat dialect, so this default serves any provider
+#: that does. The model is a setting rather than a constant: hosted models are
+#: renamed and retired often, and the screen lists what the key can actually
+#: use rather than making somebody guess.
+DEFAULT_BASE_URL = "https://api.groq.com/openai/v1"
+DEFAULT_MODEL = "llama-3.3-70b-versatile"
 
 #: Reasoning over a large schema is slow, and a suggestion that arrives late is
 #: still useful. A suggestion that never arrives is not.
@@ -129,7 +133,7 @@ class LLMProvider(Protocol):
 
 class OpenAICompatibleProvider:
     """
-    Grok, and anything else speaking the OpenAI chat dialect.
+    Groq, and anything else speaking the OpenAI chat dialect.
 
     Asks for JSON back and parses it here, so every caller above receives a
     dictionary or an error -- never a string of prose that has to be scraped.
@@ -273,6 +277,44 @@ class OpenAICompatibleProvider:
                 "The AI provider is having trouble at their end.", retryable=True
             )
         return AIError(f"The AI provider refused the request. {detail}".strip())
+
+
+    def models(self) -> list[str]:
+        """
+        The models this key can actually use.
+
+        Asked rather than assumed, for the same reason the database picker lists
+        real databases: a model name typed from memory fails with "not found",
+        and hosted models are renamed and retired more often than anyone tracks.
+        """
+        try:
+            response = httpx.get(
+                f"{self._config.base_url}/models",
+                headers={"Authorization": f"Bearer {self._config.api_key}"},
+                timeout=30.0,
+            )
+        except httpx.HTTPError as error:
+            raise AIError(
+                f"Could not reach the AI provider: {self._redact(str(error))}",
+                retryable=True,
+            ) from error
+
+        if response.status_code >= 400:
+            raise self._explain(response)
+
+        try:
+            body = response.json()
+        except ValueError as error:
+            raise AIError("The AI provider's model list was not JSON.") from error
+
+        data = body.get("data") if isinstance(body, dict) else None
+        if not isinstance(data, list):
+            return []
+        return sorted(
+            str(item.get("id"))
+            for item in data
+            if isinstance(item, dict) and item.get("id")
+        )
 
 
 def build_provider(session: Session) -> OpenAICompatibleProvider:

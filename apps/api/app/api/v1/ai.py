@@ -85,6 +85,46 @@ def put_settings(
     return get_settings(db=db, principal=principal)
 
 
+class ModelsRequest(BaseModel):
+    base_url: str = Field(default=DEFAULT_BASE_URL, max_length=300)
+    #: Omitted means "use the stored key" -- so the list can be refreshed
+    #: without pasting the key again.
+    api_key: str | None = Field(default=None, max_length=400)
+
+
+@router.post("/models")
+def models(
+    payload: ModelsRequest,
+    db: DbSession = Depends(get_session),
+    principal: Principal = Depends(require(Permission.MANAGE_CONNECTIONS)),
+):
+    """
+    Which models this key can use.
+
+    Takes the key in the request so it can be tested before it is saved: being
+    told the key works, and which models it reaches, is the difference between
+    configuring this and guessing at it.
+    """
+    from app.services.ai.provider import AIConfig, OpenAICompatibleProvider
+
+    stored = load_config(db)
+    config = AIConfig(
+        base_url=(payload.base_url or stored.base_url or DEFAULT_BASE_URL).rstrip("/"),
+        model=stored.model or DEFAULT_MODEL,
+        api_key=payload.api_key or stored.api_key,
+        enabled=True,
+    )
+    if not config.api_key:
+        raise HTTPException(status_code=400, detail="No API key to test.")
+
+    try:
+        found = OpenAICompatibleProvider(config).models()
+    except AIError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+    return {"models": found, "base_url": config.base_url}
+
+
 @router.get("/status")
 def status(
     db: DbSession = Depends(get_session),

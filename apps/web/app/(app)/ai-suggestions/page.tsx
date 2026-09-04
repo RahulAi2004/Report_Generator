@@ -403,7 +403,27 @@ function SettingsPanel({ onClose }: { onClose: () => void }) {
   const [apiKey, setApiKey] = useState('');
   const [error, setError] = useState<string | null>(null);
 
+  const [models, setModels] = useState<string[] | null>(null);
   const current = settings.data;
+
+  const test = useMutation({
+    mutationFn: () =>
+      api.aiModels({
+        base_url: baseUrl || current?.base_url,
+        api_key: apiKey || undefined,
+      }),
+    onSuccess: (body) => {
+      setModels(body.models);
+      setError(null);
+      // Keep whatever is already chosen if the provider still offers it.
+      if (!body.models.includes(model || current?.model || '')) {
+        setModel(body.models[0] ?? '');
+      }
+    },
+    onError: (failure) =>
+      setError(failure instanceof ApiError ? failure.message : String(failure)),
+  });
+
   const save = useMutation({
     mutationFn: () =>
       api.saveAiSettings({
@@ -437,16 +457,30 @@ function SettingsPanel({ onClose }: { onClose: () => void }) {
                   className="field font-mono text-xs"
                 />
                 <p className="mt-0.5 text-[10px] text-ink-faint">
-                  Grok&rsquo;s API, or anything that speaks the same dialect.
+                  Groq&rsquo;s API, or anything that speaks the same dialect.
                 </p>
               </div>
               <div>
                 <label className="label">Model</label>
-                <input
-                  value={model || current?.model || ''}
-                  onChange={(event) => setModel(event.target.value)}
-                  className="field font-mono text-xs"
-                />
+                {models && models.length > 0 ? (
+                  <Select
+                    value={model || current?.model || ''}
+                    onChange={setModel}
+                    options={models.map((name) => ({ value: name, label: name }))}
+                    className="font-mono text-xs"
+                  />
+                ) : (
+                  <input
+                    value={model || current?.model || ''}
+                    onChange={(event) => setModel(event.target.value)}
+                    className="field font-mono text-xs"
+                  />
+                )}
+                <p className="mt-0.5 text-[10px] text-ink-faint">
+                  {models
+                    ? `${models.length} models this key can use.`
+                    : 'Test the key to list the models it can actually use.'}
+                </p>
               </div>
             </div>
 
@@ -478,6 +512,12 @@ function SettingsPanel({ onClose }: { onClose: () => void }) {
 
             <div className="flex justify-end gap-2 border-t border-line pt-3">
               <Button onClick={onClose}>Cancel</Button>
+              <Button
+                disabled={test.isPending || (!current?.has_api_key && !apiKey)}
+                onClick={() => test.mutate()}
+              >
+                {test.isPending ? 'Testing…' : 'Test key & list models'}
+              </Button>
               <Button
                 variant="primary"
                 disabled={save.isPending || (!current?.has_api_key && !apiKey)}
