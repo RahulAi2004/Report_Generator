@@ -417,11 +417,17 @@ def _disambiguate(tables: Iterable[TableMeta]) -> list[TableMeta]:
         columns = tuple(
             ColumnMeta(**{**_as_dict(column), "table": qualified}) for column in table.columns
         )
+        # The label has to carry the distinction too. Qualifying only the name
+        # left four different tables all showing as "Leads" in the field
+        # picker: correctly separated underneath, and indistinguishable to the
+        # person choosing between them.
+        label = table.display_name or humanize(table.name)
         out.append(
             TableMeta(
                 **{
                     **_as_dict(table),
                     "name": qualified,
+                    "display_name": f"{label} ({table.schema})",
                     "physical_name": table.physical_name or table.name,
                     "columns": columns,
                 }

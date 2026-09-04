@@ -177,3 +177,23 @@ def test_a_join_naming_a_table_that_does_not_exist_is_left_alone():
 
     joins = Resolver(registry).canonical_joins(definition)
     assert joins[0].right_table == "ghost_table"
+
+
+def test_a_qualified_table_says_which_schema_it_is_from(collided):
+    """
+    The regression this exists for: four tables named "leads" in four schemas
+    all appeared in the field picker as "Leads". Correctly separated
+    underneath, and indistinguishable to the person choosing between them.
+    """
+    labels = {meta.label for meta in collided.tables}
+    assert "Customers (reporting)" in labels
+    assert "Customers (public)" in labels
+    # Exactly as many labels as tables: nothing is ambiguous on screen.
+    assert len(labels) == len(collided.tables)
+
+
+def test_a_table_that_never_collided_keeps_its_plain_label(collided):
+    """Adding "(reporting)" to everything would be noise, not information."""
+    shipments = collided.table("shipments")
+    assert shipments.label == "Shipments"
+    assert "(" not in shipments.label
