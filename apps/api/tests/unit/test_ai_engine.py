@@ -381,3 +381,17 @@ def test_focusing_still_respects_the_budget(registry):
         registry, focus=[t.name for t in registry.tables], budget=500
     )
     assert len(described.text) < 1400
+
+
+def test_the_budget_counts_the_relationships_too(registry):
+    """
+    They were appended after the budget was checked, so a 12,000-character
+    budget produced 15,745 characters. A limit that does not bound anything is
+    not a limit.
+    """
+    for budget in (300, 800, 2000):
+        described = context.describe_in_full(registry, budget=budget)
+        # One table's worth of overshoot is expected; several times over is not.
+        assert len(described.text) < budget * 2 + 400, (
+            f"budget {budget} produced {len(described.text)} characters"
+        )

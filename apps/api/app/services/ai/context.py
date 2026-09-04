@@ -144,8 +144,16 @@ def describe_in_full(
         if r.left_table in described and r.right_table in described
     ]
     if joins:
+        # Counted against the budget too. They were added after it was checked,
+        # which let a 12,000-character budget produce 15,745 characters -- a
+        # limit that does not bound anything is not a limit.
         lines.append("RELATIONSHIPS (these tables can be joined):")
-        lines.extend(joins[:100])
+        room = max(0, budget - used)
+        for join in joins[:100]:
+            if room <= 0:
+                break
+            lines.append(join)
+            room -= len(join) + 1
 
     if included < len(every):
         lines.append("")
