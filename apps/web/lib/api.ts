@@ -14,6 +14,7 @@ import type {
   SchemaTable,
   ValidationResult,
 } from './types';
+import type { AiContext, AiSettings, AiStatus, Suggestion } from './ai-types';
 import type { BoardCount, BoardListing } from './board-types';
 import type {
   Connector,
@@ -241,6 +242,21 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ ...options, definition }),
     }),
+
+  // -- AI suggestions -----------------------------------------------------
+  aiStatus: () => request<AiStatus>('/ai/status'),
+  aiSettings: () => request<AiSettings>('/ai/settings'),
+  saveAiSettings: (body: {
+    base_url: string; model: string; api_key?: string; enabled: boolean;
+  }) => request<AiSettings>('/ai/settings', {
+    method: 'PUT', body: JSON.stringify(body),
+  }),
+  /** Exactly what would be sent to the provider, so it can be read rather than trusted. */
+  aiContext: () => request<AiContext>('/ai/context'),
+  aiSuggest: (body: { tables?: string[]; interest?: string }) =>
+    post<{ suggestions: Suggestion[]; runnable: number }>('/ai/suggest', body),
+  aiAsk: (body: { question: string; tables?: string[] }) =>
+    post<Suggestion>('/ai/ask', body),
 
   // -- API connectors -----------------------------------------------------
   connectorProviders: () => request<{ providers: Provider[] }>('/connectors/providers'),

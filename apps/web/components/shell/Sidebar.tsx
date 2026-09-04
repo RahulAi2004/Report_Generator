@@ -59,6 +59,12 @@ const NAV: Item[] = [
     icon: icon(<><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M3 9h18M9 9v11" /><path d="M12 13h6M12 16h4" /></>),
   },
   {
+    href: '/ai-suggestions',
+    label: 'AI Suggestions',
+    ready: true,
+    icon: icon(<><path d="M12 3l1.9 4.6L18.5 9.5l-4.6 1.9L12 16l-1.9-4.6L5.5 9.5l4.6-1.9z" /><path d="M18 15l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z" /></>),
+  },
+  {
     href: '/reports',
     label: 'Reports',
     ready: true,
