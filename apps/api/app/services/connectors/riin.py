@@ -255,12 +255,24 @@ class RiinConnector(RestConnector):
 
     @staticmethod
     def _total(result: dict) -> int | None:
+        """
+        How many records the supplier says there are.
+
+        A numeric string counts. This API is inconsistent about it -- craftType
+        comes back as "1" and priceMode as 1 in the same row -- so insisting on
+        an integer meant discovery could not report a count it had been given.
+        """
         data = result.get("data")
-        if isinstance(data, dict):
-            for key in ("total", "totalCount", "totalRecords", "count"):
-                value = data.get(key)
-                if isinstance(value, int):
-                    return value
+        if not isinstance(data, dict):
+            return None
+        for key in ("total", "totalCount", "totalRecords", "count"):
+            value = data.get(key)
+            if isinstance(value, bool):
+                continue
+            if isinstance(value, int):
+                return value
+            if isinstance(value, str) and value.strip().isdigit():
+                return int(value.strip())
         return None
 
     # -- fetching -----------------------------------------------------------

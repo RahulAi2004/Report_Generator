@@ -561,3 +561,21 @@ def test_the_default_table_name_does_not_repeat_itself():
     # Nothing to distinguish, so nothing appended.
     assert _default_name("Catalogue styles", "", "") == "Catalogue styles"
     assert _default_name("Catalogue styles", "catalogue styles", "x") == "Catalogue styles"
+
+
+def test_a_count_arriving_as_a_string_is_still_a_count():
+    """
+    This API is inconsistent about it -- craftType comes back as "1" and
+    priceMode as 1 in the same row -- so insisting on an integer meant discovery
+    could not report a total it had been handed.
+    """
+    from app.services.connectors.riin import RiinConnector as R
+
+    assert R._total({"data": {"total": 63}}) == 63
+    assert R._total({"data": {"total": "63"}}) == 63
+    assert R._total({"data": {"totalCount": " 40 "}}) == 40
+    # And nothing that is not a number.
+    assert R._total({"data": {"total": "many"}}) is None
+    assert R._total({"data": {"total": True}}) is None
+    assert R._total({"data": []}) is None
+    assert R._total({}) is None
