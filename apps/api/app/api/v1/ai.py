@@ -204,11 +204,13 @@ def schema_context(
     that no data leaves.
     """
     registry = schema_service.build_registry(db, principal)
-    described = context.describe(registry)
+    described = context.describe_in_full(registry)
     return {
-        "context": described,
-        "characters": len(described),
-        "tables": len(registry.tables),
+        "context": described.text,
+        "characters": len(described.text),
+        "tables": described.included,
+        "tables_total": described.total,
+        "trimmed": described.trimmed,
         "note": (
             "This is everything sent to the AI provider: table names, column "
             "names and types, and how the tables relate. No row of data is "

@@ -40,6 +40,10 @@ export interface AiSettings {
 export interface AiContext {
   context: string;
   characters: number;
+  /** How many tables fitted in the budget. */
   tables: number;
+  /** How many exist in total. */
+  tables_total: number;
+  trimmed: boolean;
   note: string;
 }

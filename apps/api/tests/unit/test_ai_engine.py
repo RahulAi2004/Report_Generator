@@ -323,3 +323,61 @@ def test_the_prompt_names_the_fields_and_rules_out_the_wrong_ones():
         assert required in prompt
     for wrong in ("dimensions", "metrics", "alias"):
         assert wrong in prompt, f"the prompt should name '{wrong}' as wrong"
+
+
+# ---------------------------------------------------------------------------
+# The schema has to fit in one request
+# ---------------------------------------------------------------------------
+def test_the_schema_is_bounded_by_size(registry):
+    """
+    The regression this exists for: 162 tables described in full came to nearly
+    37,000 characters. Providers refuse that outright as too large, and it
+    exhausts a per-minute token budget in three or four questions.
+    """
+    described = context.describe_in_full(registry, budget=400)
+
+    assert len(described.text) < 1200, "the budget was not respected"
+    assert described.included >= 1, "at least one table should survive any budget"
+
+
+def test_a_trimmed_schema_says_so(registry):
+    """
+    Silence here would leave the model, and the person reading its answer,
+    believing it had seen everything.
+    """
+    described = context.describe_in_full(registry, budget=200)
+    if described.trimmed:
+        assert "of" in described.text and "tables" in described.text
+        assert described.included < described.total
+
+
+def test_a_schema_that_fits_is_not_trimmed(registry):
+    described = context.describe_in_full(registry, budget=100_000)
+    assert described.trimmed is False
+    assert described.included == described.total
+    assert "NOTE: this is" not in described.text
+
+
+def test_the_most_connected_tables_are_kept_first(registry):
+    """
+    A large table nothing joins to is rarely what a report is about; a small one
+    at the centre of the schema often is. Ordering by row count alone would
+    drop exactly the tables that make joins possible.
+    """
+    described = context.describe_in_full(registry, budget=600)
+    kept = [line for line in described.text.splitlines() if line.startswith("TABLE ")]
+    assert kept, "nothing survived"
+
+    # Whatever survives should be something the relationships actually mention.
+    joined = {r.left_table for r in registry.relationships} | {
+        r.right_table for r in registry.relationships
+    }
+    first = kept[0].split()[1]
+    assert first in joined, f"{first} is not connected to anything"
+
+
+def test_focusing_still_respects_the_budget(registry):
+    described = context.describe_in_full(
+        registry, focus=[t.name for t in registry.tables], budget=500
+    )
+    assert len(described.text) < 1400

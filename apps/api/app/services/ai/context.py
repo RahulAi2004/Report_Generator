@@ -15,38 +15,89 @@ builder does rather than the raw schema.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from app.domain.schema.registry import Aggregation, DataType, SchemaRegistry
 
-#: Beyond this the prompt gets long enough to cost real money and slow enough to
-#: time out, and the model's attention is worse rather than better.
-MAX_TABLES = 60
-MAX_COLUMNS_PER_TABLE = 40
+#: The schema has to fit in one request alongside the prompt and the answer.
+#: A hundred and sixty tables does not: describing them all came to nearly
+#: 37,000 characters, which providers refuse outright as too large and which
+#: exhausts a per-minute token budget in three or four questions.
+#:
+#: Measured in characters rather than tokens because the ratio is close enough
+#: (roughly four to one) and counting tokens would mean carrying a tokeniser
+#: for every model anyone might configure.
+MAX_CHARACTERS = 12_000
+MAX_TABLES = 40
+MAX_COLUMNS_PER_TABLE = 30
 
 #: Types worth mentioning as measurable, so the model does not try to sum a name.
 _NUMERIC = (DataType.INTEGER, DataType.DECIMAL)
 _TEMPORAL = (DataType.DATE, DataType.DATETIME)
 
 
-def describe(registry: SchemaRegistry, focus: list[str] | None = None) -> str:
+@dataclass
+class Described:
+    """The schema text, and what had to be left out of it."""
+
+    text: str
+    included: int
+    total: int
+
+    @property
+    def trimmed(self) -> bool:
+        return self.included < self.total
+
+
+def describe(
+    registry: SchemaRegistry,
+    focus: list[str] | None = None,
+    budget: int = MAX_CHARACTERS,
+) -> str:
+    """The schema as the model sees it."""
+    return describe_in_full(registry, focus, budget).text
+
+
+def describe_in_full(
+    registry: SchemaRegistry,
+    focus: list[str] | None = None,
+    budget: int = MAX_CHARACTERS,
+) -> Described:
     """
-    The schema as the model sees it.
+    The schema as the model sees it, and how much of it fitted.
 
     Written as compact text rather than JSON: the same information costs
     noticeably fewer tokens, and models follow a table-per-line layout more
     reliably than deeply nested objects.
+
+    Bounded by size rather than only by count, because a table with sixty
+    columns costs as much as ten small ones and the provider counts characters
+    rather than tables.
     """
-    tables = registry.tables
+    every = registry.tables
+    tables = every
     if focus:
         wanted = {name.lower() for name in focus}
         chosen = [t for t in tables if t.name.lower() in wanted]
         tables = chosen or tables
 
-    # Bigger tables first: a report is far more likely to be about orders than
-    # about a lookup table with four rows in it.
-    tables = sorted(tables, key=lambda t: -(t.estimated_rows or 0))[:MAX_TABLES]
+    # Most useful first: rows matter, and so does being connected to anything.
+    # A large table nothing joins to is rarely what a report is about, and a
+    # small one at the centre of the schema often is.
+    joined: dict[str, int] = {}
+    for relationship in registry.relationships:
+        joined[relationship.left_table] = joined.get(relationship.left_table, 0) + 1
+        joined[relationship.right_table] = joined.get(relationship.right_table, 0) + 1
+
+    tables = sorted(
+        tables,
+        key=lambda t: (-(joined.get(t.name, 0)), -(t.estimated_rows or 0), t.name),
+    )[:MAX_TABLES]
     names = {table.name for table in tables}
 
     lines: list[str] = []
+    used = 0
+    included = 0
     for table in tables:
         header = f"TABLE {table.name}"
         if table.display_name and table.display_name != table.name:
@@ -78,16 +129,33 @@ def describe(registry: SchemaRegistry, focus: list[str] | None = None) -> str:
             )
         lines.append("")
 
+        # Stop at the budget rather than being refused by the provider for
+        # being too large -- a partial schema produces a usable answer, and a
+        # rejected request produces none.
+        used = sum(len(line) + 1 for line in lines)
+        included += 1
+        if used >= budget:
+            break
+
+    described = {table.name for table in tables[:included]}
     joins = [
         f"  {r.left_table}.{r.left_column} = {r.right_table}.{r.right_column}"
         for r in registry.relationships
-        if r.left_table in names and r.right_table in names
+        if r.left_table in described and r.right_table in described
     ]
     if joins:
         lines.append("RELATIONSHIPS (these tables can be joined):")
-        lines.extend(joins[:120])
+        lines.extend(joins[:100])
 
-    return "\n".join(lines)
+    if included < len(every):
+        lines.append("")
+        lines.append(
+            f"NOTE: this is {included} of {len(every)} tables -- the ones most "
+            "connected to the rest. Ask about others by name and they will be "
+            "included."
+        )
+
+    return Described(text="\n".join(lines), included=included, total=len(every))
 
 
 def aggregations_note() -> str:

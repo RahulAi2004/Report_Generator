@@ -384,8 +384,16 @@ function ContextPanel({ onClose }: { onClose: () => void }) {
               &ldquo;it only sees the schema&rdquo; is a claim and this is the thing itself.
             </p>
             <p className="mb-2 text-2xs text-ink-faint">
-              {context.data?.tables} tables · {context.data?.characters.toLocaleString()} characters
+              {context.data?.tables} of {context.data?.tables_total} tables ·{' '}
+              {context.data?.characters.toLocaleString()} characters
             </p>
+            {context.data?.trimmed && (
+              <p className="mb-2 rounded border border-warn-border bg-warn-soft px-3 py-2 text-2xs text-warn">
+                Only part of the schema fits in one request, so the most connected
+                tables are sent. Narrow to the tables you care about and the AI sees
+                those in full — which is also why its answers are better when you do.
+              </p>
+            )}
             <pre className="max-h-[420px] overflow-auto rounded border border-line bg-canvas p-3 font-mono text-[10px] leading-relaxed text-ink-muted">
               {context.data?.context}
             </pre>
