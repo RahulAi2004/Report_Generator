@@ -92,6 +92,7 @@ def list_tables(
             if needle in table.name.lower()
             or needle in table.label.lower()
             or needle in table.category.lower()
+            or needle in (table.schema or "").lower()
             or needle in (table.description or "").lower()
         ]
     if category:

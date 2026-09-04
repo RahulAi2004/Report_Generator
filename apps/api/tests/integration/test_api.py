@@ -860,3 +860,25 @@ def test_a_search_matching_nothing_still_returns_cleanly(client, admin):
     body = client.get("/api/v1/schema/tables?search=zzzznotathing", headers=admin).json()
     assert body["total_tables"] == 0
     assert body["categories"] == []
+
+
+def test_searching_data_sources_finds_a_whole_schema(client, admin):
+    """
+    A table name is only qualified when it collides with another schema's, so
+    most tables in a schema carry no trace of it in their name. Searching for
+    where the data lives found two tables out of twenty-seven -- the two that
+    happened to collide.
+    """
+    body = client.get("/api/v1/schema/tables", headers=admin).json()
+    tables = [t for category in body["categories"] for t in category["tables"]]
+    schemas = {t["schema"] for t in tables if t.get("schema")}
+    assert schemas, "no schemas to search for"
+
+    for schema in sorted(schemas):
+        expected = sum(1 for t in tables if t["schema"] == schema)
+        found = client.get(
+            f"/api/v1/schema/tables?search={schema}", headers=admin
+        ).json()["total_tables"]
+        assert found >= expected, (
+            f"searching '{schema}' found {found} of the {expected} tables in it"
+        )
