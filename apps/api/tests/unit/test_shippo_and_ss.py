@@ -428,10 +428,15 @@ def test_no_write_endpoint_is_reachable(monkeypatch):
     monkeypatch.setattr("app.services.connectors.riin.httpx.post", must_not_be_called)
 
     for path in (
+        # All five write endpoints the supplier documents.
         "/trade/api/interface/placeOrder",
         "/trade/api/interface/updateOrder",
+        "/trade/api/interface/preShipped",
         "/trade/api/interface/closeOrder",
-        "/trade/api/interface/queryOrderInfo",   # a read, but not one we offer
+        "/trade/api/interface/updatePrintImage",
+        # Reads, but not ones this connector offers.
+        "/trade/api/interface/queryOrderInfo",
+        "/trade/api/interface/queryOrderStatus",
         "/anything/else",
     ):
         with pytest.raises(ConnectorError) as raised:
@@ -441,7 +446,7 @@ def test_no_write_endpoint_is_reachable(monkeypatch):
     assert called is False
 
 
-def test_the_three_read_endpoints_are_allowed(monkeypatch):
+def test_every_offered_read_endpoint_is_allowed(monkeypatch):
     from app.services.connectors.riin import READ_ENDPOINTS
     from app.services.connectors.riin import RiinConnector as R
 
@@ -460,8 +465,122 @@ def test_the_three_read_endpoints_are_allowed(monkeypatch):
     for path in READ_ENDPOINTS.values():
         connector._post(path, {"pageIndex": 1, "pageSize": 1})
 
-    assert len(reached) == 3
+    assert len(reached) == len(READ_ENDPOINTS)
     assert all("query" in url for url in reached)
+
+
+def test_the_address_endpoint_is_asked_for_no_page_and_offered_no_next(monkeypatch):
+    """
+    queryShipAddress takes no request fields. Sending it a page number returns
+    the same rows again -- which looks exactly like paging that works, and
+    would sync one short list forever.
+    """
+    from app.services.connectors.riin import RiinConnector as R
+
+    connector = R("a-long-enough-secret")
+    bodies: list[bytes] = []
+
+    class FakeResponse:
+        status_code = 200
+        def json(self):
+            return {"successful": True, "data": [{"addressId": "A1", "city": "Foshan"}]}
+
+    def fake_post(url, content=None, headers=None, timeout=None):
+        bodies.append(content)
+        return FakeResponse()
+
+    monkeypatch.setattr("app.services.connectors.riin.httpx.post", fake_post)
+    page = connector.fetch("ship_addresses", "account")
+
+    assert bodies == [b"{}"]
+    assert page.rows == [{"addressId": "A1", "city": "Foshan"}]
+    assert page.cursor is None
+
+
+def test_products_page_and_stop_on_a_short_page(monkeypatch):
+    """
+    The catalogue table people will actually report on: one row per
+    style/colour/size the supplier stocks, with weight and dimensions.
+    """
+    import json
+
+    from app.services.connectors.riin import PAGE_SIZE
+    from app.services.connectors.riin import RiinConnector as R
+
+    connector = R("a-long-enough-secret")
+    asked: list[dict] = []
+
+    def rows(count: int) -> list[dict]:
+        return [{"productCode": f"P{n}", "weight": "180"} for n in range(count)]
+
+    class FakeResponse:
+        def __init__(self, count): self.count = count
+        status_code = 200
+        def json(self):
+            return {"successful": True, "data": {"records": rows(self.count)}}
+
+    def fake_post(url, content=None, headers=None, timeout=None):
+        body = json.loads(content)
+        asked.append(body)
+        # A full page first, a short one second.
+        return FakeResponse(PAGE_SIZE if body["pageIndex"] == 1 else 3)
+
+    monkeypatch.setattr("app.services.connectors.riin.httpx.post", fake_post)
+
+    first = connector.fetch("products", "account")
+    assert asked[0] == {"pageIndex": 1, "pageSize": PAGE_SIZE}
+    assert first.cursor == "2"
+
+    second = connector.fetch("products", "account", cursor=first.cursor)
+    assert asked[1]["pageIndex"] == 2
+    assert len(second.rows) == 3
+    assert second.cursor is None
+
+
+def test_every_dataset_offered_has_an_endpoint_behind_it():
+    """
+    Offering a dataset the connector cannot fetch produces an empty table and
+    a report built on nothing.
+    """
+    from app.services.connectors.riin import DATASETS, READ_ENDPOINTS
+
+    assert {d.key for d in DATASETS} == set(READ_ENDPOINTS)
+
+
+def test_a_non_ascii_body_is_signed_as_the_bytes_that_are_sent(monkeypatch):
+    r"""
+    json.dumps escapes non-ASCII to \uXXXX unless told not to. The server hashes
+    the bytes it actually received, so the escaped form signs a string it never
+    saw, and a perfectly good key is reported as an authentication failure.
+
+    Every body this connector sends today is ASCII. The day one is not, this is
+    the bug, and it presents as "bad credentials".
+    """
+    import hashlib
+
+    from app.services.connectors.riin import READ_ENDPOINTS
+    from app.services.connectors.riin import RiinConnector as R
+
+    connector = R("mysecret")
+    sent: dict = {}
+
+    class FakeResponse:
+        status_code = 200
+        def json(self):
+            return {"successful": True, "data": []}
+
+    def fake_post(url, content=None, headers=None, timeout=None):
+        sent["body"] = content
+        sent["sign"] = headers["sign"]
+        return FakeResponse()
+
+    monkeypatch.setattr("app.services.connectors.riin.httpx.post", fake_post)
+    connector._post(READ_ENDPOINTS["colors"], {"name": "黑色"})
+
+    body = sent["body"].decode("utf-8")
+    # The characters themselves, not the six-character escape for them.
+    assert "黑色" in body
+    assert sent["sign"] == hashlib.md5(f"{body}::mysecret".encode()).hexdigest()
 
 
 def test_the_signature_covers_the_exact_body_that_is_sent():

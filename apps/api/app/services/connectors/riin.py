@@ -11,10 +11,17 @@ That signature is why guessing could never have worked, and it is worth stating
 plainly: the credential is not a bearer token, and a request with the right key
 but an unsigned body is refused exactly like one with no key at all.
 
-The other thing this connector does deliberately is refuse to grow. The same
-API places, updates and closes real orders with a supplier. A reporting tool has
-no business holding those, so only the `query` endpoints exist here -- not as a
-convention, but as the only paths this file contains.
+The other thing this connector does deliberately is refuse to grow. Of the
+fourteen endpoints the supplier documents, five write: placeOrder, updateOrder,
+preShipped, closeOrder and updatePrintImage. Every one of them acts on a real
+order with a real factory. A reporting tool has no business holding those, so
+they are absent from this file rather than merely unused.
+
+Of the nine that read, five can be enumerated and are here. The other four --
+queryOrderStatus, queryOrderDelivery, queryOrderInfo and queryProductShipAddress
+-- all require the caller to already know which IDs to ask about, and the
+supplier offers no endpoint that lists them. They are missing because the API
+has no way to answer them without a list from somewhere else, not by choice.
 """
 
 from __future__ import annotations
@@ -22,6 +29,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import time
 from datetime import date
 from typing import Any
 
@@ -46,15 +54,26 @@ INTERFACE = "/trade/api/interface"
 #: client asks for and what this API is known to serve without complaint.
 PAGE_SIZE = 1000
 
-#: Read-only by construction. The supplier's API also has placeOrder, updateOrder
-#: and closeOrder, which act on real orders with a real factory. They are absent
-#: here rather than merely unused: a reporting tool that *could* place an order
-#: is one bad code path away from placing one.
+#: Read-only by construction. A reporting tool that *could* place an order is
+#: one bad code path away from placing one.
 READ_ENDPOINTS: dict[str, str] = {
     "styles": f"{INTERFACE}/queryStyle",
     "colors": f"{INTERFACE}/queryColor",
     "sizes": f"{INTERFACE}/querySize",
+    "products": f"{INTERFACE}/queryProduct",
+    "ship_addresses": f"{INTERFACE}/queryShipAddress",
 }
+
+#: Which of those take pageIndex/pageSize. queryShipAddress takes no request
+#: fields at all and answers in one go; sending it a page number returns the
+#: same rows again, which looks exactly like paging that works.
+PAGED: frozenset[str] = frozenset({"styles", "colors", "sizes", "products"})
+
+#: Ten requests per second per endpoint is the supplier's documented limit.
+#: Spacing every call by a tenth of a second stays under it without having to
+#: track which endpoint is being called -- and a sync that gets itself rate
+#: limited reports an error the person configuring it cannot act on.
+MIN_INTERVAL = 0.1
 
 #: The supplier's order status codes, as their own client maps them. Carried so
 #: a report can group by something a person recognises rather than by 1, 5, 12.
@@ -92,6 +111,23 @@ DATASETS: tuple[DatasetKind, ...] = (
         resource_kind="account",
         key_columns=("sizeCode",),
     ),
+    DatasetKind(
+        key="products",
+        label="Catalogue products",
+        description=(
+            "Every style/colour/size combination the supplier stocks, with the "
+            "weight and dimensions of each."
+        ),
+        resource_kind="account",
+        key_columns=("productCode",),
+    ),
+    DatasetKind(
+        key="ship_addresses",
+        label="Factory ship-from addresses",
+        description="The factory addresses orders can be dispatched from.",
+        resource_kind="account",
+        key_columns=("addressId",),
+    ),
 )
 
 
@@ -108,6 +144,7 @@ class RiinConnector(RestConnector):
         super().__init__(token, **kwargs)
         if base_url:
             self.base_url = base_url.rstrip("/")
+        self._last_call = 0.0
 
     def label(self) -> str:
         return "DIGI / RIIN"
@@ -156,7 +193,18 @@ class RiinConnector(RestConnector):
                 f"{', '.join(sorted(_ALLOWED_PATHS))}."
             )
 
-        body_text = json.dumps(body, separators=(",", ":"))
+        # ensure_ascii=False matters even though today's bodies are all ASCII.
+        # Without it Python escapes a non-ASCII character to \uXXXX, the server
+        # hashes the bytes it actually received, and the two signatures differ
+        # -- reported as an authentication failure, with a key that is perfectly
+        # good. The supplier's own example passes this flag.
+        body_text = json.dumps(body, separators=(",", ":"), ensure_ascii=False)
+
+        wait = MIN_INTERVAL - (time.monotonic() - self._last_call)
+        if wait > 0:
+            time.sleep(wait)
+        self._last_call = time.monotonic()
+
         try:
             response = httpx.post(
                 f"{self.base_url}{path}",
@@ -237,6 +285,17 @@ class RiinConnector(RestConnector):
         result = self._post(READ_ENDPOINTS["styles"], {"pageIndex": 1, "pageSize": 1})
         total = self._total(result)
 
+        # Cheap, and worth knowing before the first sync: a catalogue of eight
+        # styles and one of eight thousand products are the same connection.
+        try:
+            products = self._total(
+                self._post(READ_ENDPOINTS["products"], {"pageIndex": 1, "pageSize": 1})
+            )
+        except ConnectorError:
+            # An older account may not have this endpoint enabled. That is not
+            # a reason to fail a connection whose credential just worked.
+            products = None
+
         found.resources = [Resource(
             id="account",
             kind="account",
@@ -245,7 +304,11 @@ class RiinConnector(RestConnector):
             # api_catalogue_styles_digi_riin_https_tshirt_riin_com -- present in
             # the field list, and unfindable in it.
             name="Supplier catalogue",
-            detail={"styles_in_catalogue": total, "base_url": self.base_url},
+            detail={
+                "styles_in_catalogue": total,
+                "products_in_catalogue": products,
+                "base_url": self.base_url,
+            },
         )]
         found.detail = (
             "Authenticated with the signed secret key. The catalogue answered"
@@ -289,6 +352,10 @@ class RiinConnector(RestConnector):
             raise ConnectorError(
                 f"DIGI / RIIN connector has no dataset called '{dataset}'."
             )
+
+        if dataset not in PAGED:
+            # No request fields, one answer, no next page.
+            return Page(rows=self._records(self._post(path, {})), cursor=None)
 
         page_index = int(cursor) if cursor and cursor.isdigit() else 1
         result = self._post(path, {"pageIndex": page_index, "pageSize": PAGE_SIZE})
