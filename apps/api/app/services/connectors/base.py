@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Any, Iterable, Protocol
+from typing import Any, Iterable, Literal, Protocol
 
 
 class ConnectorError(Exception):
@@ -76,6 +76,32 @@ class Discovery:
 
 
 @dataclass(frozen=True)
+class KeySource:
+    """
+    Where a dataset's identifiers come from when the API will not supply them.
+
+    Some endpoints answer only about identifiers the caller already holds and
+    offer no way to list them. The supplier's order endpoints are the example:
+    each takes a list of order numbers, and there is no "list my orders". Read
+    on its own, that API cannot produce an orders table at all.
+
+    It is not missing, only somewhere else -- the orders were placed from this
+    company's own system, which recorded every number it sent. This says which
+    column holds them, so the sync can ask the right questions.
+    """
+
+    #: "operational" -- a table in the database being reported on.
+    #: "dataset"     -- another dataset this same connector already syncs.
+    origin: Literal["operational", "dataset"]
+    table: str
+    column: str
+    #: How many identifiers one request may carry, as the provider documents.
+    #: Sending more is not a smaller number of larger requests; it is a request
+    #: that silently answers about the first N and drops the rest.
+    batch_size: int = 100
+
+
+@dataclass(frozen=True)
 class DatasetKind:
     """One table a connector can produce."""
 
@@ -90,6 +116,8 @@ class DatasetKind:
     key_columns: tuple[str, ...] = ()
     #: Whether the dataset is a time series that can be fetched incrementally.
     time_series: bool = False
+    #: Set when the endpoint cannot be asked "what have you got".
+    key_source: "KeySource | None" = None
 
 
 @dataclass

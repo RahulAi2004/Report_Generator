@@ -17,11 +17,19 @@ preShipped, closeOrder and updatePrintImage. Every one of them acts on a real
 order with a real factory. A reporting tool has no business holding those, so
 they are absent from this file rather than merely unused.
 
-Of the nine that read, five can be enumerated and are here. The other four --
-queryOrderStatus, queryOrderDelivery, queryOrderInfo and queryProductShipAddress
--- all require the caller to already know which IDs to ask about, and the
-supplier offers no endpoint that lists them. They are missing because the API
-has no way to answer them without a list from somewhere else, not by choice.
+All nine that read are here, in two shapes.
+
+Five can be asked what they hold: the catalogue endpoints page through styles,
+colours, sizes, products and ship-from addresses.
+
+The other four cannot. queryOrderStatus, queryOrderDelivery, queryOrderInfo and
+queryProductShipAddress each take a list of identifiers and answer about exactly
+those, and nothing lists them -- there is no "list my orders". For a while that
+looked like a wall. It was not: the orders were placed from this company's own
+system, which recorded every number it sent, and the product codes come from the
+catalogue this connector already syncs. Those datasets declare a `key_source`
+saying where to read the identifiers, and the sync supplies them in batches the
+supplier accepts.
 """
 
 from __future__ import annotations
@@ -38,6 +46,7 @@ import httpx
 from app.services.connectors.base import (
     ConnectorError,
     DatasetKind,
+    KeySource,
     Discovery,
     Page,
     Resource,
@@ -62,6 +71,31 @@ READ_ENDPOINTS: dict[str, str] = {
     "sizes": f"{INTERFACE}/querySize",
     "products": f"{INTERFACE}/queryProduct",
     "ship_addresses": f"{INTERFACE}/queryShipAddress",
+    "order_status": f"{INTERFACE}/queryOrderStatus",
+    "order_delivery": f"{INTERFACE}/queryOrderDelivery",
+    "order_info": f"{INTERFACE}/queryOrderInfo",
+    "product_ship_addresses": f"{INTERFACE}/queryProductShipAddress",
+}
+
+#: Endpoints that will not tell you what they hold. Each takes a list of
+#: identifiers and answers about exactly those; none of them can be asked "what
+#: have you got". The name of the field carrying that list differs per
+#: endpoint, which is the only reason this is a mapping and not a set.
+KEYED_ENDPOINTS: dict[str, str] = {
+    "order_status": "platformOidList",
+    "order_delivery": "platformOidList",
+    "order_info": "platformOidList",
+    "product_ship_addresses": "productCodeList",
+}
+
+#: Arrays that are the row rather than a detail of it. queryOrderStatus answers
+#: per order with a list of line statuses inside; keeping that as JSON text
+#: would put goodsStatus in a column nobody can filter on. Exploding it gives
+#: one row per line, with the order's own fields repeated -- which is what a
+#: line-level table is.
+EXPLODE: dict[str, str] = {
+    "order_status": "childOrderStatus",
+    "product_ship_addresses": "addressList",
 }
 
 #: Which of those take pageIndex/pageSize. queryShipAddress takes no request
@@ -127,6 +161,54 @@ DATASETS: tuple[DatasetKind, ...] = (
         description="The factory addresses orders can be dispatched from.",
         resource_kind="account",
         key_columns=("addressId",),
+    ),
+    DatasetKind(
+        key="order_status",
+        label="Order status (per line)",
+        description=(
+            "Where each order line has got to, in the supplier's own words: "
+            "one row per line, with the order's status alongside."
+        ),
+        resource_kind="account",
+        key_columns=("platformOid", "platformOllId"),
+        key_source=KeySource(origin="operational", table="blanktex.purchases",
+                             column="order_no", batch_size=100),
+    ),
+    DatasetKind(
+        key="order_delivery",
+        label="Order tracking and labels",
+        description=(
+            "Tracking number, carrier and the URL of the shipping label PDF, "
+            "for orders that have shipped."
+        ),
+        resource_kind="account",
+        key_columns=("platformOid",),
+        key_source=KeySource(origin="operational", table="blanktex.purchases",
+                             column="order_no", batch_size=100),
+    ),
+    DatasetKind(
+        key="order_info",
+        label="Order detail",
+        description=(
+            "The supplier's own copy of each order header: recipient, address, "
+            "carrier, shop, and the times it moved between states."
+        ),
+        resource_kind="account",
+        key_columns=("platformOid",),
+        key_source=KeySource(origin="operational", table="blanktex.purchases",
+                             column="order_no", batch_size=100),
+    ),
+    DatasetKind(
+        key="product_ship_addresses",
+        label="Which factory ships which product",
+        description=(
+            "One row per product and dispatch address. Ten product codes per "
+            "request is the supplier's limit, so this is the slowest sync here."
+        ),
+        resource_kind="account",
+        key_columns=("productCode", "addressId"),
+        key_source=KeySource(origin="dataset", table="products",
+                             column="productCode", batch_size=10),
     ),
 )
 
@@ -252,9 +334,9 @@ class RiinConnector(RestConnector):
         return result
 
     @staticmethod
-    def _records(result: dict) -> list[dict]:
+    def _raw_records(result: dict) -> list[dict]:
         """
-        The rows out of the supplier's envelope.
+        The records as the supplier sent them, before flattening.
 
         Catalogue calls answer with `data.records`; order calls answer with
         `data` as a bare list. Both shapes are handled because getting it wrong
@@ -262,12 +344,45 @@ class RiinConnector(RestConnector):
         """
         data = result.get("data")
         if isinstance(data, dict) and isinstance(data.get("records"), list):
-            return [flatten(row) for row in data["records"] if isinstance(row, dict)]
-        if isinstance(data, list):
-            return [flatten(row) for row in data if isinstance(row, dict)]
-        if isinstance(result.get("records"), list):
-            return [flatten(row) for row in result["records"] if isinstance(row, dict)]
-        return []
+            source = data["records"]
+        elif isinstance(data, list):
+            source = data
+        elif isinstance(result.get("records"), list):
+            source = result["records"]
+        else:
+            source = []
+        return [row for row in source if isinstance(row, dict)]
+
+    @classmethod
+    def _records(cls, result: dict) -> list[dict]:
+        """One flat row per record."""
+        return [flatten(row) for row in cls._raw_records(result)]
+
+    @classmethod
+    def _exploded(cls, result: dict, nested: str) -> list[dict]:
+        """
+        One row per entry of a record's detail array.
+
+        queryOrderStatus answers per order with the line statuses inside it.
+        Left alone, that array becomes JSON text in a single column and
+        goodsStatus is something nobody can filter on. Opened out, it is a
+        line-level table with the order's own fields repeated on each row --
+        which is what it always was.
+        """
+        rows: list[dict] = []
+        for record in cls._raw_records(result):
+            children = record.get(nested)
+            parent = flatten({k: v for k, v in record.items() if k != nested})
+            if not isinstance(children, list) or not children:
+                # An order with no lines yet, or a product that ships from
+                # nowhere. Dropping it would make "nothing there" and "never
+                # asked" look the same.
+                rows.append(parent)
+                continue
+            for child in children:
+                rows.append({**parent, **flatten(child)} if isinstance(child, dict)
+                            else {**parent, nested: child})
+        return rows
 
     # -- discovery ----------------------------------------------------------
     def discover(self) -> Discovery:
@@ -346,12 +461,32 @@ class RiinConnector(RestConnector):
         since: date | None = None,
         until: date | None = None,
         cursor: str | None = None,
+        keys: list[str] | None = None,
     ) -> Page:
         path = READ_ENDPOINTS.get(dataset)
         if path is None:
             raise ConnectorError(
                 f"DIGI / RIIN connector has no dataset called '{dataset}'."
             )
+
+        nested = EXPLODE.get(dataset)
+
+        field = KEYED_ENDPOINTS.get(dataset)
+        if field is not None:
+            if not keys:
+                # Deliberately not an empty result. This endpoint answers an
+                # empty list with an empty list, and a table that quietly
+                # emptied itself is the failure this refuses to perform.
+                raise ConnectorError(
+                    f"'{dataset}' has to be told which identifiers to ask "
+                    "about, and none were supplied."
+                )
+            result = self._post(path, {field: list(keys)})
+            rows = (self._exploded(result, nested) if nested
+                    else self._records(result))
+            # One request, one batch. Batching is the sync's job: it knows how
+            # many identifiers there are and this does not.
+            return Page(rows=rows, cursor=None)
 
         if dataset not in PAGED:
             # No request fields, one answer, no next page.

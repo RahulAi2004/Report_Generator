@@ -215,7 +215,7 @@ def sync_dataset(session: Session, dataset: ConnectorDataset) -> ConnectorDatase
 
     try:
         client = build_connector(connector_row)
-        rows = _fetch_all(client, kind, dataset)
+        rows = _fetch_all(client, kind, dataset, session)
     except ConnectorError as error:
         # The previous data stays. Yesterday's figures beat no figures.
         dataset.status = "error"
@@ -253,12 +253,121 @@ def sync_dataset(session: Session, dataset: ConnectorDataset) -> ConnectorDatase
     return dataset
 
 
-def _fetch_all(client, kind: DatasetKind, dataset: ConnectorDataset) -> list[dict]:
+#: Most identifiers one sync will ask about. A cap because the number comes
+#: from a table that grows: at ten codes per request, a catalogue of fifty
+#: thousand products would be five thousand requests every hour.
+MAX_IDENTIFIERS = 20_000
+
+
+def _identifiers(session: Session, source, dataset: ConnectorDataset) -> list[str]:
+    """
+    The identifiers a keyed dataset must be given.
+
+    Read from wherever they were recorded -- the operational database for order
+    numbers this company sent, or another dataset for codes the API itself
+    supplied. Distinct and non-empty, because asking the same question twice
+    costs a request and answers nothing new.
+    """
+    from app.services import schema_service  # deferred: schema_service uses this module
+
+    if source.origin == "dataset":
+        sibling = session.scalar(
+            sa.select(ConnectorDataset).where(
+                ConnectorDataset.connector_id == dataset.connector_id,
+                ConnectorDataset.dataset_key == source.table,
+            )
+        )
+        if sibling is None or not sibling.physical_table:
+            raise ConnectorError(
+                f"'{dataset.dataset_key}' is built from the '{source.table}' "
+                "dataset, which is not being synced yet. Add that one first."
+            )
+        column = safe_identifier(source.column.lower())
+        with get_engine().connect() as connection:
+            found = connection.execute(
+                sa.text(
+                    f'select distinct "{column}" from '
+                    f'"{CONNECTOR_SCHEMA}"."{sibling.physical_table}" '
+                    f'where "{column}" is not null'
+                )
+            ).scalars().all()
+        return [str(value) for value in found][:MAX_IDENTIFIERS]
+
+    registry = schema_service.build_registry(session)
+    meta = registry.table(source.table)
+    if meta is None:
+        raise ConnectorError(
+            f"'{dataset.dataset_key}' reads its identifiers from "
+            f"'{source.table}', which is not in the reporting schema."
+        )
+    # A bare name resolves to the first schema configured, which is right for
+    # something saved years ago and wrong here: this name is written in code
+    # and means one table. If it says which schema, that is the one.
+    wanted_schema = source.table.split(".", 1)[0] if "." in source.table else None
+    if wanted_schema and (meta.schema or "") != wanted_schema:
+        raise ConnectorError(
+            f"'{source.table}' resolved to {meta.schema}.{meta.real_name}, "
+            "which is a different table with the same name."
+        )
+    if not any(c.name == source.column for c in meta.columns):
+        raise ConnectorError(
+            f"'{source.table}' has no column called '{source.column}'."
+        )
+
+    # Names come from this module's own dataset definitions and are checked
+    # against the registry above, never taken from a request.
+    where = f'"{source.column}" is not null'
+    table = f'"{meta.schema}"."{meta.real_name}"' if meta.schema else f'"{meta.real_name}"'
+    result = schema_service.adapter_for(session).execute(
+        sa.text(f'select distinct "{source.column}" from {table} where {where}'),
+        max_rows=MAX_IDENTIFIERS,
+    )
+    return [str(row[0]) for row in result.rows if row[0] is not None]
+
+
+def _batched(values: list[str], size: int):
+    for start in range(0, len(values), size):
+        yield values[start:start + size]
+
+
+def _fetch_all(
+    client, kind: DatasetKind, dataset: ConnectorDataset, session: Session | None = None
+) -> list[dict]:
     """Walk the provider's pages until they run out, or a limit is reached."""
     since = until = None
     if kind.time_series:
         until = date.today()
         since = until - timedelta(days=max(1, dataset.lookback_days))
+
+    if kind.key_source is not None:
+        if session is None:
+            raise ConnectorError(
+                f"'{kind.key}' needs identifiers and none can be looked up here."
+            )
+        identifiers = _identifiers(session, kind.key_source, dataset)
+        if not identifiers:
+            raise ConnectorError(
+                f"No identifiers found in {kind.key_source.table}."
+                f"{kind.key_source.column}, so there is nothing to ask about. "
+                "The previous data has been left alone."
+            )
+        rows: list[dict] = []
+        for batch in _batched(identifiers, kind.key_source.batch_size):
+            page = client.fetch(
+                dataset=kind.key,
+                resource_id=dataset.resource_id,
+                since=since,
+                until=until,
+                cursor=None,
+                keys=batch,
+            )
+            rows.extend(page.rows)
+            if len(rows) >= MAX_ROWS_PER_SYNC:
+                logger.warning(
+                    "Dataset %s hit the row limit at %s rows", dataset.id, len(rows)
+                )
+                return rows[:MAX_ROWS_PER_SYNC]
+        return rows
 
     rows: list[dict] = []
     cursor: str | None = None

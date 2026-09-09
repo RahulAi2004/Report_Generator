@@ -434,9 +434,10 @@ def test_no_write_endpoint_is_reachable(monkeypatch):
         "/trade/api/interface/preShipped",
         "/trade/api/interface/closeOrder",
         "/trade/api/interface/updatePrintImage",
-        # Reads, but not ones this connector offers.
-        "/trade/api/interface/queryOrderInfo",
-        "/trade/api/interface/queryOrderStatus",
+        # queryOrderInfo and queryOrderStatus stood here as "reads this
+        # connector does not offer". Both are offered now, so this stands in
+        # for the same case: something shaped like a query that is not ours.
+        "/trade/api/interface/queryAnythingElse",
         "/anything/else",
     ):
         with pytest.raises(ConnectorError) as raised:
