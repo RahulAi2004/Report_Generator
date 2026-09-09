@@ -107,8 +107,30 @@ def unique_identifiers(headers: list[str]) -> list[tuple[str, str]]:
 # ---------------------------------------------------------------------------
 # Type inference
 # ---------------------------------------------------------------------------
+#: A comma is a thousands separator only when it separates thousands.
+_GROUPED_INT = re.compile(r"^[+-]?\d{1,3}(?:,\d{3})+$")
+_GROUPED_DECIMAL = re.compile(r"^[+-]?\d{1,3}(?:,\d{3})+(?:\.\d+)?$")
+
+
+def _degroup(text: str, grouped: re.Pattern) -> str | None:
+    """
+    Strip thousands separators, or refuse the value outright.
+
+    Removing every comma unconditionally is what a spreadsheet importer wants
+    for "1,234" and what corrupts everything else. The supplier's craftType
+    says which print techniques a style supports and arrives as "1", "2" or
+    "1,2"; blanket removal turned "1,2" into the integer twelve, and 34 of 64
+    styles were stored claiming a craft type that does not exist. A value with
+    a comma in it that is not grouped in threes is not a number, and saying so
+    here leaves it as text -- which is what it was.
+    """
+    if "," not in text:
+        return text
+    return text.replace(",", "") if grouped.match(text) else None
+
+
 def _as_int(value: str):
-    text = value.replace(",", "").replace(" ", "")
+    text = _degroup(value.replace(" ", ""), _GROUPED_INT)
     if not text or text in "+-":
         return None
     try:
@@ -118,9 +140,11 @@ def _as_int(value: str):
 
 
 def _as_decimal(value: str):
-    text = value.replace(",", "").replace(" ", "")
-    # Currency symbols and a trailing percent are common in exported sheets.
-    text = re.sub(r"^[£$€₹]|%$", "", text)
+    # Currency symbols and a trailing percent are common in exported sheets,
+    # and they have to come off before the grouping is checked: "$1,999.00" is
+    # properly grouped, and a leading $ stops the pattern from seeing that.
+    text = re.sub(r"^[£$€₹]|%$", "", value.replace(" ", ""))
+    text = _degroup(text, _GROUPED_DECIMAL)
     if not text:
         return None
     try:
