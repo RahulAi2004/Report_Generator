@@ -27,6 +27,7 @@ from app.adapters.base import DatabaseAdapter, QueryExecutionError, QueryResult
 from app.core.db import get_engine
 from app.domain.report.compiler import CompiledReport
 from app.domain.schema.registry import DataType, SchemaRegistry
+from app.services.connector_service import CONNECTOR_SCHEMA
 from app.services.upload_service import UPLOAD_SCHEMA
 
 logger = logging.getLogger(__name__)
@@ -37,6 +38,17 @@ logger = logging.getLogger(__name__)
 MAX_STAGED_ROWS = 200_000
 
 STAGE_BATCH = 5_000
+
+#: What an unqualified table name is resolved against on the local side.
+#:
+#: Both schemas belong here, and leaving one out is not a cosmetic omission.
+#: Uploaded spreadsheets live in one, API-synced tables in the other, and a
+#: report that mixes a database table with either is compiled without schema
+#: qualification -- so a schema missing from this list is a table the query
+#: cannot see. With only the uploads schema listed, joining anything in the
+#: database to a Meta or supplier table failed with "This report could not be
+#: run", which says nothing about a search path to the person reading it.
+LOCAL_SEARCH_PATH = f'pg_temp, "{UPLOAD_SCHEMA}", "{CONNECTOR_SCHEMA}", public'
 
 _SA_TYPES: dict[DataType, type] = {
     DataType.TEXT: sa.Text,
@@ -103,7 +115,7 @@ def _execute_local(statement, max_rows: int, connection=None) -> QueryResult:
     connection = connection or get_engine().connect()
     try:
         if own and get_engine().dialect.name == "postgresql":
-            connection.execute(sa.text(f'SET search_path TO pg_temp, "{UPLOAD_SCHEMA}", public'))
+            connection.execute(sa.text(f"SET search_path TO {LOCAL_SEARCH_PATH}"))
         cursor = connection.execute(statement)
         columns = list(cursor.keys())
         rows = cursor.fetchmany(max_rows + 1)
@@ -151,7 +163,7 @@ def _execute_hybrid(
 
     with engine.connect() as connection:
         connection.execute(
-            sa.text(f'SET search_path TO pg_temp, "{UPLOAD_SCHEMA}", public')
+            sa.text(f"SET search_path TO {LOCAL_SEARCH_PATH}")
         )
 
         for table_name in operational:
