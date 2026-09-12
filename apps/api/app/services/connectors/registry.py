@@ -62,6 +62,11 @@ class ProviderSpec:
     default_api_version: str = ""
     #: Whether the provider can trade a short-lived credential for a long one.
     supports_token_exchange: bool = False
+    #: The Data Sources heading its tables sit under. Empty means "<label> API".
+    #: Set when the provider's tables belong with data from elsewhere: DIGI's
+    #: catalogue comes through its API, but its orders were placed from BlankTex
+    #: and live in that database, and two headings split one supplier in half.
+    category: str = ""
 
 
 TOKEN = CredentialField(
@@ -162,6 +167,7 @@ PROVIDERS: dict[str, ProviderSpec] = {
         ),
         datasets=RIIN_DATASETS,
         build=lambda token, app_id="", **_: RiinConnector(token, base_url=app_id or ""),
+        category="DIGI / RIIN",
     ),
 }
 

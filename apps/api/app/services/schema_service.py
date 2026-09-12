@@ -121,7 +121,7 @@ def build_registry(
 
     tables: list[TableMeta] = []
     for table in snapshot.tables:
-        override = table_overrides.get(table.name)
+        override = _override_for(table, table_overrides)
         columns = tuple(
             _apply_column_override(column, column_overrides.get((table.name, column.name)))
             for column in table.columns
@@ -201,6 +201,23 @@ def build_registry(
         denied_columns=principal.denied_columns,
         mask_policies=_mask_policies(column_overrides),
     )
+
+
+def _override_for(table: TableMeta, overrides: dict) -> "SchemaTable | None":
+    """
+    The admin override for one physical table.
+
+    A schema-qualified entry ("blanktex.suppliers") wins over a bare one
+    ("suppliers"). Bare entries predate multi-schema introspection and are still
+    honoured, but they cannot tell namesakes apart: three schemas here have a
+    `suppliers` table, and renaming the supplier's own record by its bare name
+    would have renamed the other two with it.
+    """
+    if table.schema:
+        qualified = overrides.get(f"{table.schema}.{table.name}")
+        if qualified is not None:
+            return qualified
+    return overrides.get(table.name)
 
 
 def _apply_column_override(

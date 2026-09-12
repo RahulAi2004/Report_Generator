@@ -16,10 +16,12 @@ import type { SchemaCategory, SchemaTable } from '@/lib/types';
  *
  * Two things it does deliberately.
  *
- * Tables synced from an API sit in their own section rather than mixed in with
- * the database's own. They behave identically in a report, but where a number
- * came from is the first thing anybody asks about it, and ad spend sitting
- * between two CRM tables invites the assumption that it is one of them.
+ * Categories are grouped by where their tables come from: the database, an API,
+ * or both. They behave identically in a report, but where a number came from is
+ * the first thing anybody asks about it. "Both" exists because one supplier can
+ * be both -- DIGI's catalogue arrives through its API while its orders live in
+ * BlankTex's database -- and splitting that across two headings is how half of
+ * it went unnoticed. Each row's icon still says which kind of table it is.
  *
  * And the panel is resizable. Table names are as long as the database made
  * them; two hundred fixed pixels truncates exactly the ones that need reading.
@@ -70,13 +72,18 @@ export function DataSourcePanel({
   }, [categories, search]);
 
   // A table synced from an API executes locally, which is what `upload` means
-  // here -- and is exactly the set worth keeping apart.
-  const isConnected = (category: SchemaCategory) =>
-    category.tables.length > 0 && category.tables.every((table) => table.kind === 'upload');
+  // here.
+  const originOf = (category: SchemaCategory) => {
+    const synced = category.tables.filter((table) => table.kind === 'upload').length;
+    if (synced === 0) return 'database';
+    return synced === category.tables.length ? 'api' : 'mixed';
+  };
 
-  const fromDatabase = filtered.filter((category) => !isConnected(category));
-  const fromApis = filtered.filter(isConnected);
-  const bothPresent = fromDatabase.length > 0 && fromApis.length > 0;
+  const mixed = filtered.filter((category) => originOf(category) === 'mixed');
+  const fromDatabase = filtered.filter((category) => originOf(category) === 'database');
+  const fromApis = filtered.filter((category) => originOf(category) === 'api');
+  // Headings only earn their space when there is more than one group to tell apart.
+  const headed = [mixed, fromDatabase, fromApis].filter((group) => group.length > 0).length > 1;
 
   const sectionProps = {
     collapsed,
@@ -139,15 +146,29 @@ export function DataSourcePanel({
             />
           )}
 
-          {!loading && bothPresent && <GroupHeading first>From your database</GroupHeading>}
-          {!loading &&
-            fromDatabase.map((category) => (
-              <CategorySection key={category.name} category={category} {...sectionProps} />
-            ))}
+          {!loading && mixed.length > 0 && (
+            <>
+              {headed && <GroupHeading first>Database and API together</GroupHeading>}
+              {mixed.map((category) => (
+                <CategorySection key={category.name} category={category} {...sectionProps} />
+              ))}
+            </>
+          )}
+
+          {!loading && fromDatabase.length > 0 && (
+            <>
+              {headed && (
+                <GroupHeading first={mixed.length === 0}>From your database</GroupHeading>
+              )}
+              {fromDatabase.map((category) => (
+                <CategorySection key={category.name} category={category} {...sectionProps} />
+              ))}
+            </>
+          )}
 
           {!loading && fromApis.length > 0 && (
             <>
-              <GroupHeading>Synced from an API</GroupHeading>
+              {headed && <GroupHeading>Synced from an API</GroupHeading>}
               {fromApis.map((category) => (
                 <CategorySection key={category.name} category={category} {...sectionProps} />
               ))}

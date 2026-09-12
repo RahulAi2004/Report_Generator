@@ -470,6 +470,14 @@ def _provider_label(provider: str) -> str:
     return spec.label if spec else provider.title()
 
 
+def _provider_category(provider: str) -> str:
+    """The Data Sources heading a provider's tables are listed under."""
+    spec = provider_registry.spec(provider)
+    if spec is not None and spec.category:
+        return spec.category
+    return f"{_provider_label(provider)} API"
+
+
 def as_table_meta(dataset: ConnectorDataset, provider: str) -> TableMeta:
     """
     A connector dataset as an ordinary table.
@@ -486,7 +494,7 @@ def as_table_meta(dataset: ConnectorDataset, provider: str) -> TableMeta:
         schema=CONNECTOR_SCHEMA,
         physical_name=dataset.physical_table,
         kind="upload",  # executed locally, exactly like an uploaded file
-        category=f"{_provider_label(provider)} API",
+        category=_provider_category(provider),
         display_name=dataset.display_name,
         description=(
             # The provider's name is here as well as in the category, because
