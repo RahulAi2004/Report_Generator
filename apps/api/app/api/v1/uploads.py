@@ -158,6 +158,11 @@ def _serialize(value):
     from datetime import date, datetime
     from decimal import Decimal
 
+    from app.domain.uploads.parser import MAX_SAFE_INTEGER
+
+    if isinstance(value, int) and not isinstance(value, bool) and abs(value) > MAX_SAFE_INTEGER:
+        # The browser rounds a JSON number this large; as text it arrives intact.
+        return str(value)
     if isinstance(value, Decimal):
         return float(value)
     if isinstance(value, (datetime, date)):

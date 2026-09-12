@@ -20,11 +20,18 @@ from typing import Iterable, Iterator
 
 MAX_PDF_ROWS = 5_000
 
+#: Excel keeps fifteen significant digits and silently zeroes the rest, so a
+#: 19-digit order id exported as a number opens as a different id ending in
+#: zeros. Anything that long is an identifier, and goes out as text.
+SPREADSHEET_DIGITS = 10**15
+
 
 def _cell(value: object) -> object:
     """Native types where the format supports them, text where it does not."""
     if value is None:
         return ""
+    if isinstance(value, int) and not isinstance(value, bool) and abs(value) >= SPREADSHEET_DIGITS:
+        return str(value)
     if isinstance(value, Decimal):
         return float(value)
     if isinstance(value, (datetime, date)):

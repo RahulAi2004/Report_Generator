@@ -129,9 +129,34 @@ def _degroup(text: str, grouped: re.Pattern) -> str | None:
     return text.replace(",", "") if grouped.match(text) else None
 
 
+#: The largest integer a browser holds exactly. Past it a JSON number is rounded
+#: on arrival, so an order id of 2077398282558521346 is displayed with its last
+#: digits changed -- a different, wrong id that looks entirely plausible.
+MAX_SAFE_INTEGER = 2**53 - 1
+
+#: A leading zero that is not "0" itself or "0.something". Quantities never
+#: start that way; ZIP codes, phone numbers and account codes do.
+_LEADING_ZERO = re.compile(r"^[+-]?0\d")
+
+
+def _looks_like_an_identifier(text: str) -> bool:
+    """
+    Digits that are a code rather than a quantity.
+
+    Reading "03064" as a number gives 3064 and loses the zero that made it a
+    New Hampshire ZIP code; three of DIGI's orders had exactly that done to
+    them. Reading a 19-digit order id as a number is exact in the database and
+    wrong on screen. Both stay text: nobody sums a ZIP code.
+    """
+    if _LEADING_ZERO.match(text):
+        return True
+    digits = text.lstrip("+-").split(".", 1)[0]
+    return digits.isdigit() and int(digits) > MAX_SAFE_INTEGER
+
+
 def _as_int(value: str):
     text = _degroup(value.replace(" ", ""), _GROUPED_INT)
-    if not text or text in "+-":
+    if not text or text in "+-" or _looks_like_an_identifier(text):
         return None
     try:
         return int(text)
@@ -145,7 +170,7 @@ def _as_decimal(value: str):
     # properly grouped, and a leading $ stops the pattern from seeing that.
     text = re.sub(r"^[£$€₹]|%$", "", value.replace(" ", ""))
     text = _degroup(text, _GROUPED_DECIMAL)
-    if not text:
+    if not text or _looks_like_an_identifier(text):
         return None
     try:
         return Decimal(text)

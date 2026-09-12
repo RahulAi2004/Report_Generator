@@ -30,6 +30,12 @@ system, which recorded every number it sent, and the product codes come from the
 catalogue this connector already syncs. Those datasets declare a `key_source`
 saying where to read the identifiers, and the sync supplies them in batches the
 supplier accepts.
+
+Two further kinds of table sit alongside them and call no endpoint at all. The
+order lines and artwork exactly as they were sent exist only in the request
+BlankTex recorded, so they are read from its database. And what the supplier's
+codes mean -- 13 is Closed, "1,2" is front and back -- exists only in its
+documentation, so those tables are written here.
 """
 
 from __future__ import annotations
@@ -123,6 +129,133 @@ ORDER_STATUSES: dict[int, str] = {
 _ALLOWED_PATHS: frozenset[str] = frozenset(READ_ENDPOINTS.values())
 
 
+#: Guards every jsonb_array_elements below. A payload with no goodsList, or one
+#: where it is not an array, contributes no rows instead of failing the query.
+_LINES = """
+    cross join lateral jsonb_array_elements(
+        case when jsonb_typeof(p.supplier_payload -> 'goodsList') = 'array'
+             then p.supplier_payload -> 'goodsList' else '[]'::jsonb end
+    ) as g(line)"""
+
+#: Each order line exactly as BlankTex sent it to placeOrder, with the order's
+#: own declared fields alongside. Images are their own table.
+ORDER_LINES_SENT_QUERY = f"""
+select g.line - 'imageList' as line,
+       p.supplier_payload ->> 'sourcePlatformOid'    as "sourcePlatformOid",
+       p.supplier_payload ->> 'platformType'         as "platformType",
+       p.supplier_payload ->> 'platformOrderStatus'  as "platformOrderStatus",
+       p.supplier_payload ->> 'platformRefundStatus' as "platformRefundStatus",
+       p.supplier_payload ->> 'orderTime'            as "orderTime",
+       jsonb_array_length(
+           case when jsonb_typeof(g.line -> 'imageList') = 'array'
+                then g.line -> 'imageList' else '[]'::jsonb end
+       ) as "imageCount"
+from blanktex.purchases p{_LINES}
+"""
+
+#: Every artwork and mockup image sent with each line, including the imageCode
+#: BlankTex's own image table does not keep.
+ORDER_LINE_IMAGES_SENT_QUERY = f"""
+select g.line ->> 'platformOid'   as "platformOid",
+       g.line ->> 'platformOllId' as "platformOllId",
+       i.image
+from blanktex.purchases p{_LINES}
+    cross join lateral jsonb_array_elements(
+        case when jsonb_typeof(g.line -> 'imageList') = 'array'
+             then g.line -> 'imageList' else '[]'::jsonb end
+    ) as i(image)
+"""
+
+_SUPPLIER_DOC = "Supplier API document"
+_FIELD_DICTIONARY = "BlankTex field dictionary"
+
+ORDER_STATUS_CODES = tuple(
+    {"code": code, "meaning": meaning, "supplierText": chinese, "source": _SUPPLIER_DOC,
+     "note": note}
+    for code, meaning, chinese, note in (
+        (1, "Store Audit", "店铺审核", ""),
+        (2, "Pending Push", "店铺推送中", "The only state an order can still be edited in."),
+        (3, "Rejected", "已驳回", "Returned by the factory; the order's reason field says why."),
+        (4, "Factory Audit", "工厂审核", ""),
+        (5, "In Production", "生产中", ""),
+        (12, "Shipped", "已发货", ""),
+        (13, "Closed", "已关闭", "Final. Set by closeOrder or by the supplier."),
+        (14, "Refunding", "退款中", ""),
+        (15, "Refunded", "已退款", "Final."),
+    )
+)
+
+#: goodsStatus, platformOrderStatus and the refund statuses share one
+#: vocabulary of string codes that never collide, so one table serves them all.
+STATE_CODES = tuple(
+    {"code": code, "meaning": meaning, "supplierText": chinese, "source": source}
+    for code, meaning, chinese, source in (
+        ("NOT_SHIPPED", "Not shipped", "未发货", _SUPPLIER_DOC),
+        ("SHIPPED", "Shipped", "已发货", _SUPPLIER_DOC),
+        ("CLOSE", "Closed", "", _SUPPLIER_DOC),
+        ("CANCEL", "Cancelled", "", _SUPPLIER_DOC),
+        ("COMPLETE", "Completed", "", _SUPPLIER_DOC),
+        ("NO_REFUND", "No refund", "无退款", _FIELD_DICTIONARY),
+    )
+)
+
+#: The two sources disagree here, and both readings are kept rather than one
+#: being chosen quietly. The supplier's document says 1 is heat transfer and 2
+#: is DTG; BlankTex's field dictionary says 1 is DTG / print and 2 is
+#: embroidery. The supplier's reading is the one given as the meaning.
+CRAFT_TYPE_CODES = (
+    {"code": 1, "meaning": "Heat Transfer", "source": _SUPPLIER_DOC,
+     "note": "BlankTex's field dictionary reads this as DTG / print. The two disagree."},
+    {"code": 2, "meaning": "DTG (Direct-to-Garment)", "source": _SUPPLIER_DOC,
+     "note": "BlankTex's field dictionary reads this as embroidery / a second craft. The two disagree."},
+)
+
+#: Text codes on purpose: "1,2" is a code, not the number twelve.
+PRINT_POSITION_CODES = (
+    {"code": "1", "meaning": "Front only", "source": _SUPPLIER_DOC},
+    {"code": "2", "meaning": "Back only", "source": _SUPPLIER_DOC},
+    {"code": "1,2", "meaning": "Front and back", "source": _SUPPLIER_DOC,
+     "note": "Requires a back print and a back mockup image."},
+)
+
+IMAGE_TYPE_CODES = (
+    {"code": 1, "meaning": "Print / artwork file", "source": _SUPPLIER_DOC,
+     "note": "Uploaded to the supplier's image library; must be PNG."},
+    {"code": 2, "meaning": "Mockup image", "source": _SUPPLIER_DOC},
+)
+
+UNIT_TYPE_CODES = (
+    {"code": 1, "meaning": "Centimetres and kilograms", "source": _SUPPLIER_DOC,
+     "note": "BlankTex's field dictionary records this split as undocumented to it."},
+    {"code": 2, "meaning": "Inches and pounds", "source": _SUPPLIER_DOC},
+)
+
+CARRIER_CODES = (
+    {"code": 200, "meaning": "USPS", "source": _FIELD_DICTIONARY},
+    {"code": 201, "meaning": "UPS", "source": _FIELD_DICTIONARY},
+)
+
+#: Fields that only ever hold one value on this account. Kept so the value is
+#: explained somewhere, rather than being a column of 15s nobody can read.
+CONSTANT_CODES = (
+    {"field": "goodsType", "code": "1", "meaning": "Standard goods", "source": _FIELD_DICTIONARY},
+    {"field": "platformType", "code": "15", "meaning": "BlankTex's platform id at the supplier",
+     "source": _FIELD_DICTIONARY},
+    {"field": "priceMode", "code": "1", "meaning": "Standard pricing", "source": _FIELD_DICTIONARY},
+)
+
+
+def _codes(key: str, label: str, what: str, rows: tuple, key_columns=("code",)) -> DatasetKind:
+    return DatasetKind(
+        key=key,
+        label=label,
+        description=f"What the supplier's {what} codes mean. Reference data, not synced.",
+        resource_kind="account",
+        key_columns=key_columns,
+        static_rows=rows,
+    )
+
+
 DATASETS: tuple[DatasetKind, ...] = (
     DatasetKind(
         key="styles",
@@ -210,6 +343,40 @@ DATASETS: tuple[DatasetKind, ...] = (
         key_source=KeySource(origin="dataset", table="products",
                              column="productCode", batch_size=10),
     ),
+    DatasetKind(
+        key="order_lines_sent",
+        label="DIGI order lines (as sent)",
+        description=(
+            "Every order line exactly as BlankTex sent it to the supplier: style, "
+            "colour and size codes and names, title, quantity, craft type, print "
+            "position, and the states it declared. Read from BlankTex's database."
+        ),
+        resource_kind="account",
+        key_columns=("platformOllId",),
+        operational_query=ORDER_LINES_SENT_QUERY,
+    ),
+    DatasetKind(
+        key="order_line_images_sent",
+        label="DIGI order line images (as sent)",
+        description=(
+            "Every artwork and mockup image sent with each order line, with its "
+            "type, URL, code and name. Read from BlankTex's database."
+        ),
+        resource_kind="account",
+        key_columns=("platformOllId", "imageCode"),
+        operational_query=ORDER_LINE_IMAGES_SENT_QUERY,
+    ),
+    _codes("codes_order_status", "DIGI codes: order status", "order status", ORDER_STATUS_CODES),
+    _codes("codes_states", "DIGI codes: order and line states", "shipping and refund state",
+           STATE_CODES),
+    _codes("codes_craft_type", "DIGI codes: craft type", "craft type", CRAFT_TYPE_CODES),
+    _codes("codes_print_position", "DIGI codes: print position", "print position",
+           PRINT_POSITION_CODES),
+    _codes("codes_image_type", "DIGI codes: image type", "image type", IMAGE_TYPE_CODES),
+    _codes("codes_unit_type", "DIGI codes: unit type", "unit of measure", UNIT_TYPE_CODES),
+    _codes("codes_carrier", "DIGI codes: carrier", "carrier (expressCode)", CARRIER_CODES),
+    _codes("codes_constants", "DIGI codes: constants", "single-valued field", CONSTANT_CODES,
+           key_columns=("field", "code")),
 )
 
 

@@ -102,6 +102,12 @@ def _run(db: DbSession, principal: Principal, engine: ReportEngine, compiled, ma
 
 def _serialize(value: Any) -> Any:
     """JSON-safe cell values. Formatting for display happens in the browser."""
+    from app.domain.uploads.parser import MAX_SAFE_INTEGER
+
+    if isinstance(value, int) and not isinstance(value, bool) and abs(value) > MAX_SAFE_INTEGER:
+        # Sent as a JSON number, the browser rounds it: an id shown with its
+        # last digits changed is a different id, and a plausible one.
+        return str(value)
     if isinstance(value, Decimal):
         return float(value)
     if isinstance(value, (datetime, date)):

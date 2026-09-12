@@ -538,14 +538,24 @@ def test_products_page_and_stop_on_a_short_page(monkeypatch):
     assert second.cursor is None
 
 
-def test_every_dataset_offered_has_an_endpoint_behind_it():
+def test_every_dataset_offered_has_a_source_behind_it():
     """
-    Offering a dataset the connector cannot fetch produces an empty table and
-    a report built on nothing.
+    Offering a dataset nothing can fill produces an empty table and a report
+    built on nothing.
+
+    Every dataset has exactly one source: a read endpoint, BlankTex's database,
+    or reference rows written in code. The ones that call the API still match
+    the endpoints one for one.
     """
     from app.services.connectors.riin import DATASETS, READ_ENDPOINTS
 
-    assert {d.key for d in DATASETS} == set(READ_ENDPOINTS)
+    from_api = {d.key for d in DATASETS if not d.static_rows and not d.operational_query}
+    assert from_api == set(READ_ENDPOINTS)
+
+    for dataset in DATASETS:
+        sources = [dataset.key in READ_ENDPOINTS, bool(dataset.static_rows),
+                   bool(dataset.operational_query)]
+        assert sum(sources) == 1, dataset.key
 
 
 def test_a_non_ascii_body_is_signed_as_the_bytes_that_are_sent(monkeypatch):

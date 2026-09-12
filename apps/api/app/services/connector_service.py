@@ -21,6 +21,7 @@ because a token expired at 3am is not.
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from datetime import date, datetime, timedelta, timezone
@@ -34,7 +35,12 @@ from app.domain.schema.registry import ColumnMeta, DataType, TableMeta
 from app.domain.uploads.parser import coerce, infer_type, safe_identifier
 from app.models.metadata_models import ApiConnector, ConnectorDataset
 from app.services.connectors import registry as provider_registry
-from app.services.connectors.base import ConnectorError, DatasetKind, union_columns
+from app.services.connectors.base import (
+    ConnectorError,
+    DatasetKind,
+    flatten,
+    union_columns,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -325,6 +331,47 @@ def _identifiers(session: Session, source, dataset: ConnectorDataset) -> list[st
     return [str(row[0]) for row in result.rows if row[0] is not None]
 
 
+def _operational_rows(session: Session, kind: DatasetKind) -> list[dict]:
+    """
+    Rows read from the database being reported on, not from an API.
+
+    Some of what DIGI was sent survives only in the request BlankTex recorded:
+    the order lines and their artwork, exactly as they went. The query is fixed
+    in code and runs on the read-only connection, the same one every report
+    uses.
+    """
+    from app.services import schema_service  # deferred: schema_service uses this module
+
+    result = schema_service.adapter_for(session).execute(
+        sa.text(kind.operational_query), max_rows=MAX_ROWS_PER_SYNC
+    )
+    if result.truncated:
+        # Storing the first N rows as though they were all of them produces
+        # totals that are wrong and look complete.
+        raise ConnectorError(
+            f"'{kind.key}' has more than {MAX_ROWS_PER_SYNC:,} rows. Nothing was "
+            "replaced; the previous data is still there."
+        )
+    return [_open_objects(dict(zip(result.columns, row))) for row in result.rows]
+
+
+def _open_objects(row: dict) -> dict:
+    """
+    A JSON object in a column becomes fields of the row.
+
+    Left as one column, a line's styleCode is text inside text and nobody can
+    filter on it. Arrays inside the object stay as JSON text, as they do for
+    API rows.
+    """
+    opened: dict = {}
+    for key, value in row.items():
+        if isinstance(value, dict):
+            opened.update(flatten(value))
+        else:
+            opened.update(flatten({key: value}))
+    return opened
+
+
 def _batched(values: list[str], size: int):
     for start in range(0, len(values), size):
         yield values[start:start + size]
@@ -338,6 +385,17 @@ def _fetch_all(
     if kind.time_series:
         until = date.today()
         since = until - timedelta(days=max(1, dataset.lookback_days))
+
+    if kind.static_rows:
+        # Reference data defined in code. Nothing to ask anybody.
+        return [dict(row) for row in kind.static_rows]
+
+    if kind.operational_query:
+        if session is None:
+            raise ConnectorError(
+                f"'{kind.key}' reads the reporting database and none is available here."
+            )
+        return _operational_rows(session, kind)
 
     if kind.key_source is not None:
         if session is None:

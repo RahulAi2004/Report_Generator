@@ -118,6 +118,15 @@ class DatasetKind:
     time_series: bool = False
     #: Set when the endpoint cannot be asked "what have you got".
     key_source: "KeySource | None" = None
+    #: Rows defined in code rather than fetched: reference tables such as what
+    #: a supplier's status codes mean, which exist in its documentation and in
+    #: no response.
+    static_rows: tuple[dict[str, Any], ...] = ()
+    #: A fixed, read-only query against the database being reported on, for
+    #: what survives only in the request this company recorded -- the order
+    #: lines exactly as they were sent. A column holding a JSON object is
+    #: opened into fields.
+    operational_query: str = ""
 
 
 @dataclass
