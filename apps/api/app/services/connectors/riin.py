@@ -36,6 +36,13 @@ order lines and artwork exactly as they were sent exist only in the request
 BlankTex recorded, so they are read from its database. And what the supplier's
 codes mean -- 13 is Closed, "1,2" is front and back -- exists only in its
 documentation, so those tables are written here.
+
+And nothing the API returns is allowed to go missing on the way to a column.
+Every API row carries raw_json, the record exactly as it arrived. Every field
+the supplier's document names becomes a column even when no value has ever been
+sent for it. The envelope and paging fields are kept as data in their own table,
+and the document itself is a table: every field of all fourteen endpoints, with
+where to find it.
 """
 
 from __future__ import annotations
@@ -59,6 +66,13 @@ from app.services.connectors.base import (
     flatten,
 )
 from app.services.connectors.rest import RestConnector
+from app.services.connectors.riin_fields import (
+    FIELD_DICTIONARY,
+    GOODS_LABEL_FIELDS,
+    GOODS_LIST_FIELDS,
+    IMAGE_LIST_FIELDS,
+    PLACE_ORDER_FIELDS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +143,17 @@ ORDER_STATUSES: dict[int, str] = {
 _ALLOWED_PATHS: frozenset[str] = frozenset(READ_ENDPOINTS.values())
 
 
+#: Every API row also carries the record exactly as the supplier sent it.
+RAW_JSON = "raw_json"
+
+#: The dataset that keeps the envelope and paging fields as data.
+API_RESPONSES = "api_responses"
+
+
+def _json(value) -> str:
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
 #: Guards every jsonb_array_elements below. A payload with no goodsList, or one
 #: where it is not an array, contributes no rows instead of failing the query.
 _LINES = """
@@ -141,6 +166,7 @@ _LINES = """
 #: own declared fields alongside. Images are their own table.
 ORDER_LINES_SENT_QUERY = f"""
 select g.line - 'imageList' as line,
+       g.line::text as raw_json,
        p.supplier_payload ->> 'sourcePlatformOid'    as "sourcePlatformOid",
        p.supplier_payload ->> 'platformType'         as "platformType",
        p.supplier_payload ->> 'platformOrderStatus'  as "platformOrderStatus",
@@ -158,12 +184,23 @@ from blanktex.purchases p{_LINES}
 ORDER_LINE_IMAGES_SENT_QUERY = f"""
 select g.line ->> 'platformOid'   as "platformOid",
        g.line ->> 'platformOllId' as "platformOllId",
-       i.image
+       i.image,
+       i.image::text as raw_json
 from blanktex.purchases p{_LINES}
     cross join lateral jsonb_array_elements(
         case when jsonb_typeof(g.line -> 'imageList') = 'array'
              then g.line -> 'imageList' else '[]'::jsonb end
     ) as i(image)
+"""
+
+#: Each order's placeOrder body as BlankTex sent it, lines aside.
+ORDERS_SENT_QUERY = """
+select p.supplier_payload - 'goodsList' as "order",
+       case when jsonb_typeof(p.supplier_payload -> 'goodsList') = 'array'
+            then jsonb_array_length(p.supplier_payload -> 'goodsList') else 0 end as "lineCount",
+       p.supplier_payload::text as raw_json
+from blanktex.purchases p
+where p.supplier_payload is not null
 """
 
 _SUPPLIER_DOC = "Supplier API document"
@@ -344,6 +381,19 @@ DATASETS: tuple[DatasetKind, ...] = (
                              column="productCode", batch_size=10),
     ),
     DatasetKind(
+        key="orders_sent",
+        label="DIGI orders (as sent)",
+        description=(
+            "Every order exactly as BlankTex sent it to placeOrder, one row each, with a "
+            "column for every order-level field the supplier documents -- empty where "
+            "BlankTex has never sent a value. Read from BlankTex's database."
+        ),
+        resource_kind="account",
+        key_columns=("platformOid",),
+        operational_query=ORDERS_SENT_QUERY,
+        documented_fields=PLACE_ORDER_FIELDS,
+    ),
+    DatasetKind(
         key="order_lines_sent",
         label="DIGI order lines (as sent)",
         description=(
@@ -354,6 +404,7 @@ DATASETS: tuple[DatasetKind, ...] = (
         resource_kind="account",
         key_columns=("platformOllId",),
         operational_query=ORDER_LINES_SENT_QUERY,
+        documented_fields=GOODS_LIST_FIELDS + GOODS_LABEL_FIELDS,
     ),
     DatasetKind(
         key="order_line_images_sent",
@@ -365,6 +416,7 @@ DATASETS: tuple[DatasetKind, ...] = (
         resource_kind="account",
         key_columns=("platformOllId", "imageCode"),
         operational_query=ORDER_LINE_IMAGES_SENT_QUERY,
+        documented_fields=IMAGE_LIST_FIELDS,
     ),
     _codes("codes_order_status", "DIGI codes: order status", "order status", ORDER_STATUS_CODES),
     _codes("codes_states", "DIGI codes: order and line states", "shipping and refund state",
@@ -377,6 +429,31 @@ DATASETS: tuple[DatasetKind, ...] = (
     _codes("codes_carrier", "DIGI codes: carrier", "carrier (expressCode)", CARRIER_CODES),
     _codes("codes_constants", "DIGI codes: constants", "single-valued field", CONSTANT_CODES,
            key_columns=("field", "code")),
+    DatasetKind(
+        key=API_RESPONSES,
+        label="DIGI API responses",
+        description=(
+            "One live request to each catalogue endpoint, kept as the supplier answered "
+            "it: successful, message, errorCode, traceId, pageIndex, pageSize, total and "
+            "the data itself, with the request that produced it. Credentials are never kept."
+        ),
+        resource_kind="account",
+        key_columns=("endpoint",),
+        documented_fields=("successful", "message", "errorCode", "data", "traceId",
+                           "pageIndex", "pageSize", "total"),
+    ),
+    DatasetKind(
+        key="field_dictionary",
+        label="DIGI API field dictionary",
+        description=(
+            "Every field the supplier's API document names -- all fourteen endpoints, "
+            "request and response -- with its type, whether it is required, what it "
+            "means, and which table and column holds it."
+        ),
+        resource_kind="account",
+        key_columns=("endpoint", "direction", "level", "field"),
+        static_rows=FIELD_DICTIONARY,
+    ),
 )
 
 
@@ -522,8 +599,14 @@ class RiinConnector(RestConnector):
 
     @classmethod
     def _records(cls, result: dict) -> list[dict]:
-        """One flat row per record."""
-        return [flatten(row) for row in cls._raw_records(result)]
+        """
+        One flat row per record, carrying the record exactly as it arrived.
+
+        Flattening decides what becomes a column; raw_json makes sure that
+        deciding never loses anything. A nested list kept as text, or a field
+        the supplier adds tomorrow, is still there in its original form.
+        """
+        return [{**flatten(row), RAW_JSON: _json(row)} for row in cls._raw_records(result)]
 
     @classmethod
     def _exploded(cls, result: dict, nested: str) -> list[dict]:
@@ -539,7 +622,8 @@ class RiinConnector(RestConnector):
         rows: list[dict] = []
         for record in cls._raw_records(result):
             children = record.get(nested)
-            parent = flatten({k: v for k, v in record.items() if k != nested})
+            parent = {**flatten({k: v for k, v in record.items() if k != nested}),
+                      RAW_JSON: _json(record)}
             if not isinstance(children, list) or not children:
                 # An order with no lines yet, or a product that ships from
                 # nowhere. Dropping it would make "nothing there" and "never
@@ -549,6 +633,47 @@ class RiinConnector(RestConnector):
             for child in children:
                 rows.append({**parent, **flatten(child)} if isinstance(child, dict)
                             else {**parent, nested: child})
+        return rows
+
+    def _response_census(self) -> list[dict]:
+        """
+        One request to every endpoint that can be asked without identifiers, kept
+        as the supplier answered it.
+
+        This is where successful, message, errorCode, traceId, pageIndex, pageSize
+        and total exist as data rather than as plumbing. The secret key and the
+        signature travel as headers and are never recorded.
+        """
+        rows: list[dict] = []
+        for key in ("styles", "colors", "sizes", "products", "ship_addresses"):
+            path = READ_ENDPOINTS[key]
+            body = {"pageIndex": 1, "pageSize": 1} if key in PAGED else {}
+            started = time.perf_counter()
+            result = self._post(path, body)
+            data = result.get("data")
+            records = self._raw_records(result)
+            page = data if isinstance(data, dict) else {}
+            rows.append({
+                "endpoint": path.rsplit("/", 1)[1],
+                "path": path,
+                "requestBody": _json(body),
+                "successful": result.get("successful"),
+                "success": result.get("success"),
+                "message": result.get("message"),
+                "errorCode": result.get("errorCode"),
+                "traceId": result.get("traceId"),
+                "dataShape": ("page" if isinstance(data, dict)
+                              else "list" if isinstance(data, list) else type(data).__name__),
+                "pageIndex": page.get("pageIndex"),
+                "pageSize": page.get("pageSize"),
+                "total": page.get("total", len(data) if isinstance(data, list) else None),
+                "recordsReturned": len(records),
+                "responseKeys": ", ".join(sorted(result)),
+                "dataKeys": ", ".join(sorted(page)),
+                "recordKeys": ", ".join(sorted({k for r in records for k in r})),
+                "data": _json(data),
+                "durationMs": int((time.perf_counter() - started) * 1000),
+            })
         return rows
 
     # -- discovery ----------------------------------------------------------
@@ -630,6 +755,9 @@ class RiinConnector(RestConnector):
         cursor: str | None = None,
         keys: list[str] | None = None,
     ) -> Page:
+        if dataset == API_RESPONSES:
+            return Page(rows=self._response_census(), cursor=None)
+
         path = READ_ENDPOINTS.get(dataset)
         if path is None:
             raise ConnectorError(

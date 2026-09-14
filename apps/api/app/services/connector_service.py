@@ -380,6 +380,24 @@ def _batched(values: list[str], size: int):
 def _fetch_all(
     client, kind: DatasetKind, dataset: ConnectorDataset, session: Session | None = None
 ) -> list[dict]:
+    """
+    Every row of one dataset, with every documented field present.
+
+    A field the documentation names that no row carries -- an optional input
+    BlankTex has never sent -- still becomes a column, empty. Without this the
+    table silently leaves it out, and an absent column is indistinguishable
+    from a field nobody thought to include.
+    """
+    rows = _fetch_rows(client, kind, dataset, session)
+    for row in rows:
+        for name in kind.documented_fields:
+            row.setdefault(name, None)
+    return rows
+
+
+def _fetch_rows(
+    client, kind: DatasetKind, dataset: ConnectorDataset, session: Session | None = None
+) -> list[dict]:
     """Walk the provider's pages until they run out, or a limit is reached."""
     since = until = None
     if kind.time_series:

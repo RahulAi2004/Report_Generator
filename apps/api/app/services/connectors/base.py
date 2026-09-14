@@ -127,6 +127,10 @@ class DatasetKind:
     #: lines exactly as they were sent. A column holding a JSON object is
     #: opened into fields.
     operational_query: str = ""
+    #: Fields the provider documents. Each becomes a column even when no row
+    #: carries a value for it -- an optional input nobody has ever sent is still
+    #: a field of the API, and a missing column reads as one nobody looked for.
+    documented_fields: tuple[str, ...] = ()
 
 
 @dataclass

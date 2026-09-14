@@ -494,7 +494,8 @@ def test_the_address_endpoint_is_asked_for_no_page_and_offered_no_next(monkeypat
     page = connector.fetch("ship_addresses", "account")
 
     assert bodies == [b"{}"]
-    assert page.rows == [{"addressId": "A1", "city": "Foshan"}]
+    # Every API row also carries the record as it arrived; compare the fields.
+    assert [{k: v for k, v in row.items() if k != "raw_json"} for row in page.rows]         == [{"addressId": "A1", "city": "Foshan"}]
     assert page.cursor is None
 
 
@@ -547,14 +548,16 @@ def test_every_dataset_offered_has_a_source_behind_it():
     or reference rows written in code. The ones that call the API still match
     the endpoints one for one.
     """
-    from app.services.connectors.riin import DATASETS, READ_ENDPOINTS
+    from app.services.connectors.riin import API_RESPONSES, DATASETS, READ_ENDPOINTS
 
+    # The response census calls the same read endpoints; it is the one API
+    # dataset that is not an endpoint of its own.
     from_api = {d.key for d in DATASETS if not d.static_rows and not d.operational_query}
-    assert from_api == set(READ_ENDPOINTS)
+    assert from_api == set(READ_ENDPOINTS) | {API_RESPONSES}
 
     for dataset in DATASETS:
-        sources = [dataset.key in READ_ENDPOINTS, bool(dataset.static_rows),
-                   bool(dataset.operational_query)]
+        sources = [dataset.key in READ_ENDPOINTS or dataset.key == API_RESPONSES,
+                   bool(dataset.static_rows), bool(dataset.operational_query)]
         assert sum(sources) == 1, dataset.key
 
 
@@ -643,9 +646,14 @@ def test_records_are_found_in_both_envelopes():
     """
     from app.services.connectors.riin import RiinConnector as R
 
-    assert R._records({"data": {"records": [{"a": 1}]}}) == [{"a": 1}]
-    assert R._records({"data": [{"a": 1}]}) == [{"a": 1}]
-    assert R._records({"records": [{"a": 1}]}) == [{"a": 1}]
+    def fields(rows):
+        # raw_json rides along on every row; the shapes are about the fields.
+        assert all(row["raw_json"] == '{"a":1}' for row in rows)
+        return [{k: v for k, v in row.items() if k != "raw_json"} for row in rows]
+
+    assert fields(R._records({"data": {"records": [{"a": 1}]}})) == [{"a": 1}]
+    assert fields(R._records({"data": [{"a": 1}]})) == [{"a": 1}]
+    assert fields(R._records({"records": [{"a": 1}]})) == [{"a": 1}]
     assert R._records({"data": None}) == []
 
 
