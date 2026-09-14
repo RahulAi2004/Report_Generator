@@ -552,12 +552,14 @@ def test_every_dataset_offered_has_a_source_behind_it():
 
     # The response census calls the same read endpoints; it is the one API
     # dataset that is not an endpoint of its own.
-    from_api = {d.key for d in DATASETS if not d.static_rows and not d.operational_query}
+    from_api = {d.key for d in DATASETS
+                if not d.static_rows and not d.operational_query and not d.row_builder}
     assert from_api == set(READ_ENDPOINTS) | {API_RESPONSES}
 
     for dataset in DATASETS:
         sources = [dataset.key in READ_ENDPOINTS or dataset.key == API_RESPONSES,
-                   bool(dataset.static_rows), bool(dataset.operational_query)]
+                   bool(dataset.static_rows), bool(dataset.operational_query),
+                   dataset.row_builder is not None]
         assert sum(sources) == 1, dataset.key
 
 

@@ -404,6 +404,14 @@ def _fetch_rows(
         until = date.today()
         since = until - timedelta(days=max(1, dataset.lookback_days))
 
+    if kind.row_builder is not None:
+        # Rows computed in code from several read-only sources.
+        if session is None:
+            raise ConnectorError(
+                f"'{kind.key}' is built from the reporting database and none is available here."
+            )
+        return kind.row_builder(session, dataset)
+
     if kind.static_rows:
         # Reference data defined in code. Nothing to ask anybody.
         return [dict(row) for row in kind.static_rows]

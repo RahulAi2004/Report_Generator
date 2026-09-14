@@ -65,6 +65,7 @@ from app.services.connectors.base import (
     Resource,
     flatten,
 )
+from app.services.connectors import digi_match
 from app.services.connectors.rest import RestConnector
 from app.services.connectors.riin_fields import (
     FIELD_DICTIONARY,
@@ -460,6 +461,29 @@ DATASETS: tuple[DatasetKind, ...] = (
         resource_kind="account",
         key_columns=("endpoint", "direction", "level", "field"),
         static_rows=FIELD_DICTIONARY,
+    ),
+    DatasetKind(
+        key="order_po_match",
+        label="DIGI orders matched to purchase orders",
+        description=(
+            "Every DIGI order matched to its Decoinks sales order, purchase order and shipment -- "
+            "by the DIGI order number on the PO, the tracking number, or the customer's name, ZIP "
+            "code and date -- with how sure the match is and anything that needs checking. "
+            "Rebuilt on every sync. Contains customer names and addresses."
+        ),
+        resource_kind="account",
+        key_columns=("digi_order_no",),
+        row_builder=digi_match.order_rows,
+    ),
+    DatasetKind(
+        key="pos_without_digi_order",
+        label="DIGI POs with no DIGI order",
+        description=(
+            "Purchase orders raised to DIGI that no DIGI order could be matched to. Rebuilt on every sync."
+        ),
+        resource_kind="account",
+        key_columns=("purchase_order",),
+        row_builder=digi_match.po_rows,
     ),
 )
 

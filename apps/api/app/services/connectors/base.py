@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Any, Iterable, Literal, Protocol
+from typing import Any, Callable, Iterable, Literal, Protocol
 
 
 class ConnectorError(Exception):
@@ -131,6 +131,11 @@ class DatasetKind:
     #: carries a value for it -- an optional input nobody has ever sent is still
     #: a field of the API, and a missing column reads as one nobody looked for.
     documented_fields: tuple[str, ...] = ()
+    #: Rows computed in code from several sources, for what no single query or
+    #: endpoint can answer -- matching DIGI orders to purchase orders takes fuzzy
+    #: names and date closeness, which a report join cannot express. Called with
+    #: the sync's session and the dataset being refreshed; it must only read.
+    row_builder: "Callable[..., list[dict[str, Any]]] | None" = None
 
 
 @dataclass
