@@ -36,6 +36,7 @@ export function DataSourcePanel({
   onSelectTable,
   onSetPrimary,
   onAddAllFields,
+  onSearchChange,
 }: {
   categories: SchemaCategory[];
   loading: boolean;
@@ -47,6 +48,8 @@ export function DataSourcePanel({
   onSetPrimary: (table: string) => void;
   /** Add every field of a table in one action, without opening it first. */
   onAddAllFields?: (table: SchemaTable) => void;
+  /** What has been typed in the search box, for the Fields panel to reuse. */
+  onSearchChange?: (value: string) => void;
 }) {
   const [search, setSearch] = useState('');
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
@@ -65,7 +68,11 @@ export function DataSourcePanel({
             // Somebody who knows where the data lives searches for that, not
             // for what the table happens to be called.
             (table.schema ?? '').toLowerCase().includes(needle) ||
-            category.name.toLowerCase().includes(needle),
+            category.name.toLowerCase().includes(needle) ||
+            // And by a field it holds. Typing platformRefundStatus straight out
+            // of the supplier's document used to find nothing at all, which
+            // looked exactly like the field not existing.
+            fieldMatches(table, needle).length > 0,
         ),
       }))
       .filter((category) => category.tables.length > 0);
@@ -86,6 +93,7 @@ export function DataSourcePanel({
   const headed = [mixed, fromDatabase, fromApis].filter((group) => group.length > 0).length > 1;
 
   const sectionProps = {
+    needle: search.trim().toLowerCase(),
     collapsed,
     setCollapsed,
     selectedTables,
@@ -119,8 +127,11 @@ export function DataSourcePanel({
             </svg>
             <input
               value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="Search tables, or a schema…"
+              onChange={(event) => {
+                setSearch(event.target.value);
+                onSearchChange?.(event.target.value);
+              }}
+              placeholder="Search tables or fields…"
               className="field pl-7 text-sm"
             />
           </div>
@@ -140,7 +151,7 @@ export function DataSourcePanel({
               title={search ? 'No tables match' : 'No tables available'}
               hint={
                 search
-                  ? 'Try a different search term, or the name of a schema.'
+                  ? 'No table or field has that name. Try part of it.'
                   : 'Connect a database under Data Sources, or ask an administrator for access.'
               }
             />
@@ -182,6 +193,24 @@ export function DataSourcePanel({
   );
 }
 
+/**
+ * The fields of a table whose name, label or source spelling contain the search,
+ * given back as the source spells them. Punctuation is ignored, so
+ * "platform_refund_status" finds platformRefundStatus too.
+ */
+export function fieldMatches(table: SchemaTable, needle: string): string[] {
+  if (!needle) return [];
+  const compact = needle.replace(/[^a-z0-9]/g, '');
+  return (table.fields ?? [])
+    .filter((field) =>
+      field.some((value) => {
+        const text = (value ?? '').toLowerCase();
+        return text.includes(needle) || (compact !== '' && text.replace(/[^a-z0-9]/g, '').includes(compact));
+      }),
+    )
+    .map(([name, , source]) => source || name);
+}
+
 function GroupHeading({
   children,
   first,
@@ -203,6 +232,7 @@ function GroupHeading({
 
 function CategorySection({
   category,
+  needle,
   collapsed,
   setCollapsed,
   selectedTables,
@@ -214,6 +244,7 @@ function CategorySection({
   onAddAllFields,
 }: {
   category: SchemaCategory;
+  needle: string;
   collapsed: Record<string, boolean>;
   setCollapsed: React.Dispatch<React.SetStateAction<Record<string, boolean>>>;
   selectedTables: string[];
@@ -256,6 +287,7 @@ function CategorySection({
           <TableRow
             key={table.name}
             table={table}
+            needle={needle}
             selected={selectedTables.includes(table.name)}
             isPrimary={primaryTable === table.name}
             isActive={activeTable === table.name}
@@ -271,6 +303,7 @@ function CategorySection({
 
 function TableRow({
   table,
+  needle,
   selected,
   isPrimary,
   isActive,
@@ -280,6 +313,7 @@ function TableRow({
   onAddAllFields,
 }: {
   table: SchemaTable;
+  needle: string;
   selected: boolean;
   isPrimary: boolean;
   isActive: boolean;
@@ -289,6 +323,7 @@ function TableRow({
   onAddAllFields?: () => void;
 }) {
   const fromApi = table.kind === 'upload';
+  const matched = fieldMatches(table, needle);
 
   return (
     <div
@@ -338,6 +373,15 @@ function TableRow({
         }`}
       >
         {table.label}
+        {matched.length > 0 && (
+          <span
+            className="block truncate font-mono text-2xs text-accent"
+            title={`Fields matching the search: ${matched.join(', ')}`}
+          >
+            {matched.slice(0, 3).join(', ')}
+            {matched.length > 3 ? ` +${matched.length - 3}` : ''}
+          </span>
+        )}
       </span>
 
       {onAddAllFields && (

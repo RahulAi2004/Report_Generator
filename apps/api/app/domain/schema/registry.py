@@ -150,6 +150,10 @@ class ColumnMeta:
     mask_policy: MaskPolicy = MaskPolicy.NONE
     enabled_for_reporting: bool = True
     default_format: dict | None = None
+    #: The name as the source spells it, when that differs from the column name
+    #: -- an API's camelCase key, say. The column is `platformrefundstatus`; the
+    #: supplier's document, and anybody reading it, calls it platformRefundStatus.
+    source_name: str | None = None
 
     @property
     def label(self) -> str:

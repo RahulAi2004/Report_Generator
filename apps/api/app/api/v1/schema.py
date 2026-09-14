@@ -43,6 +43,11 @@ def _table_payload(table: TableMeta, include_columns: bool = False) -> dict:
         "column_count": len(table.columns),
         "primary_key": [column.name for column in table.primary_key],
         "is_sensitive": table.is_sensitive,
+        # Every field's name, label and source spelling, so a table can be
+        # found by a field it holds. Searching only table names meant typing a
+        # field name straight out of the supplier's document found nothing,
+        # which looked exactly like the field not existing.
+        "fields": [[c.name, c.label, c.source_name or ""] for c in table.columns],
     }
     if include_columns:
         payload["columns"] = [_column_payload(column) for column in table.columns]
@@ -61,11 +66,34 @@ def _column_payload(column) -> dict:
         "is_foreign_key": column.is_foreign_key,
         "is_sensitive": column.is_sensitive,
         "is_masked": column.mask_policy.value != "none",
+        "source_name": column.source_name,
         # The UI never has to know which aggregations are legal for which type:
         # it renders exactly what the backend permits (spec 8).
         "aggregations": [a.value for a in column.legal_aggregations],
         "operators": list(legal_operators(column.data_type)),
     }
+
+
+def _matches(table: TableMeta, search: str) -> bool:
+    """
+    Whether a search names this table or anything in it.
+
+    Name, label, category, schema, description -- and every field, by its
+    column name, its label, or the way its source spells it.
+    """
+    needle = search.strip().lower()
+    if not needle:
+        return True
+    if any(needle in (value or "").lower() for value in (
+        table.name, table.label, table.category, table.schema, table.description,
+    )):
+        return True
+    return any(
+        needle in column.name.lower()
+        or needle in column.label.lower()
+        or needle in (column.source_name or "").lower()
+        for column in table.columns
+    )
 
 
 @router.get("/tables")
@@ -86,15 +114,7 @@ def list_tables(
         # came from a particular supplier searched for the supplier and found
         # nothing -- the tables were called "Catalogue styles" and it was the
         # category heading that carried the name they were looking for.
-        needle = search.lower()
-        tables = [
-            table for table in tables
-            if needle in table.name.lower()
-            or needle in table.label.lower()
-            or needle in table.category.lower()
-            or needle in (table.schema or "").lower()
-            or needle in (table.description or "").lower()
-        ]
+        tables = [table for table in tables if _matches(table, search)]
     if category:
         tables = [table for table in tables if table.category == category]
 

@@ -1,8 +1,9 @@
 'use client';
 
 import clsx from 'clsx';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Badge, Checkbox, EmptyState, Skeleton, TypeGlyph } from '@/components/ui/primitives';
+import { ResizeHandle, useResizableWidth } from '@/components/ui/Resizable';
 import type { SchemaColumn, SchemaTable } from '@/lib/types';
 
 /**
@@ -18,6 +19,7 @@ export function FieldPanel({
   selectedFields,
   onToggleField,
   onSelectMany,
+  defaultSearch,
 }: {
   table: SchemaTable | null;
   loading: boolean;
@@ -25,8 +27,26 @@ export function FieldPanel({
   onToggleField: (table: string, column: SchemaColumn) => void;
   /** Add or remove a whole set at once, as one edit rather than many. */
   onSelectMany?: (table: string, columns: SchemaColumn[], selected: boolean) => void;
+  /** A search typed in Data Sources, applied when the chosen table has a match. */
+  defaultSearch?: string;
 }) {
   const [search, setSearch] = useState('');
+  const { width, onPointerDown, reset } = useResizableWidth('fields', 240);
+
+  // A table found in Data Sources by one of its fields opens with that field in
+  // view, instead of in a list of forty where it has to be found a second time.
+  useEffect(() => {
+    const wanted = (defaultSearch ?? '').trim();
+    const needle = wanted.toLowerCase();
+    const found =
+      needle !== '' &&
+      (table?.columns ?? []).some((column) =>
+        [column.name, column.label, column.source_name ?? ''].some((value) =>
+          value.toLowerCase().includes(needle),
+        ),
+      );
+    setSearch(found ? wanted : '');
+  }, [table?.name, table?.columns, defaultSearch]);
 
   const columns = useMemo(() => {
     const all = table?.columns ?? [];
@@ -35,7 +55,8 @@ export function FieldPanel({
     return all.filter(
       (column) =>
         column.name.toLowerCase().includes(needle) ||
-        column.label.toLowerCase().includes(needle),
+        column.label.toLowerCase().includes(needle) ||
+        (column.source_name ?? '').toLowerCase().includes(needle),
     );
   }, [table, search]);
 
@@ -62,7 +83,8 @@ export function FieldPanel({
   }
 
   return (
-    <aside className="flex w-[196px] shrink-0 flex-col border-r border-line bg-white">
+    <>
+    <aside className="flex shrink-0 flex-col border-r border-line bg-white" style={{ width }}>
       <div className="px-3 pb-2 pt-3">
         <h2 className="panel-title mb-2 truncate">
           {table ? `Fields — ${table.label}` : 'Fields'}
@@ -133,7 +155,7 @@ export function FieldPanel({
                   'flex cursor-pointer items-center gap-1.5 py-[5px] pl-3 pr-2',
                   checked ? 'bg-accent-soft/70' : 'hover:bg-canvas',
                 )}
-                title={`${column.name} · ${column.physical_type}${
+                title={`${column.source_name || column.name} · ${column.label} · ${column.physical_type}${
                   column.nullable ? ' · nullable' : ' · required'
                 }`}
               >
@@ -143,7 +165,9 @@ export function FieldPanel({
                 />
                 <TypeGlyph dataType={column.data_type} />
                 <span className="min-w-0 flex-1 truncate font-mono text-xs text-ink">
-                  {column.name}
+                  {/* As the source spells it -- the supplier's document says
+                      platformRefundStatus, not platformrefundstatus. */}
+                  {column.source_name || column.name}
                 </span>
 
                 {column.is_primary_key && <Badge tone="accent">PK</Badge>}
@@ -169,5 +193,7 @@ export function FieldPanel({
         </button>
       </div>
     </aside>
+    <ResizeHandle onPointerDown={onPointerDown} onReset={reset} label="the field list" />
+    </>
   );
 }

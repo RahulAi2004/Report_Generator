@@ -98,6 +98,8 @@ export interface SchemaColumn {
   is_foreign_key: boolean;
   is_sensitive: boolean;
   is_masked: boolean;
+  /** The field's name as its source spells it, e.g. an API's camelCase key. */
+  source_name?: string | null;
   /** Legal aggregations for this type. The UI renders only what the API allows. */
   aggregations: Aggregation[];
   operators: string[];
@@ -116,6 +118,8 @@ export interface SchemaTable {
   primary_key: string[];
   is_sensitive: boolean;
   columns?: SchemaColumn[];
+  /** [name, label, source name] of every field, so a table can be found by its fields. */
+  fields?: [string, string, string][];
 }
 
 export interface SchemaCategory {

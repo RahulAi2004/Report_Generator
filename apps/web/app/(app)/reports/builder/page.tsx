@@ -53,6 +53,8 @@ export default function BuilderPage() {
   const [sqlOpen, setSqlOpen] = useState(false);
   const [activeSection, setActiveSection] = useState<string>();
   const [toast, setToast] = useState<string | null>(null);
+  // What was typed in Data Sources, handed to the Fields panel.
+  const [sourceSearch, setSourceSearch] = useState('');
 
   const { data: me } = useQuery({ queryKey: ['me'], queryFn: api.me });
   const can = (permission: string) => me?.permissions.includes(permission) ?? false;
@@ -413,6 +415,7 @@ export default function BuilderPage() {
             onToggleTable={builder.toggleTable}
             onSelectTable={builder.selectTable}
             onSetPrimary={builder.setPrimaryTable}
+            onSearchChange={setSourceSearch}
             onAddAllFields={async (table) => {
               // The list panel only holds summaries, so the columns are fetched
               // before adding them.
@@ -430,6 +433,7 @@ export default function BuilderPage() {
             selectedFields={selectedFields}
             onToggleField={builder.toggleField}
             onSelectMany={builder.setFieldsSelected}
+            defaultSearch={sourceSearch}
           />
         </div>
 

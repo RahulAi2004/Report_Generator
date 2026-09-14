@@ -592,6 +592,7 @@ def as_table_meta(dataset: ConnectorDataset, provider: str) -> TableMeta:
                 nullable=True,
                 ordinal=index,
                 display_name=column.get("label"),
+                source_name=column.get("source"),
             )
             for index, column in enumerate(dataset.columns)
         ),

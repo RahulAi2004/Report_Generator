@@ -57,13 +57,15 @@ def test_identifiers_are_sent_in_batches_the_endpoint_accepts():
 
 
 def test_each_keyed_dataset_names_where_its_identifiers_come_from():
-    from app.services.connectors.riin import DATASETS
+    from app.services.connectors.riin import API_RESPONSES, DATASETS
 
+    # The response census is keyed as well: it needs order numbers to ask the
+    # order endpoints anything, and takes them all in one batch.
     keyed = {d.key for d in DATASETS if d.key_source is not None}
-    assert keyed == set(KEYED_ENDPOINTS)
+    assert keyed == set(KEYED_ENDPOINTS) | {API_RESPONSES}
 
     for dataset in DATASETS:
-        if dataset.key_source is None:
+        if dataset.key_source is None or dataset.key == API_RESPONSES:
             continue
         # The supplier documents 100 order ids per request and 10 product
         # codes. Sending more is not refused -- it is silently truncated.

@@ -433,14 +433,21 @@ DATASETS: tuple[DatasetKind, ...] = (
         key=API_RESPONSES,
         label="DIGI API responses",
         description=(
-            "One live request to each catalogue endpoint, kept as the supplier answered "
-            "it: successful, message, errorCode, traceId, pageIndex, pageSize, total and "
-            "the data itself, with the request that produced it. Credentials are never kept."
+            "One live request to every read endpoint, kept as the supplier answered it: "
+            "successful, message, errorCode, traceId, pageIndex, pageSize, total and the "
+            "data itself, with the request that produced it -- including the "
+            "platformOidList and productCodeList that were sent. Credentials are never kept."
         ),
         resource_kind="account",
         key_columns=("endpoint",),
+        # The order endpoints need order numbers to be asked anything. One batch
+        # is enough for a census, so the whole list is handed over at once and
+        # the census sends the first hundred.
+        key_source=KeySource(origin="operational", table="blanktex.purchases",
+                             column="order_no", batch_size=20_000),
         documented_fields=("successful", "message", "errorCode", "data", "traceId",
-                           "pageIndex", "pageSize", "total"),
+                           "pageIndex", "pageSize", "total", "platformOidList",
+                           "productCodeList"),
     ),
     DatasetKind(
         key="field_dictionary",
@@ -635,46 +642,71 @@ class RiinConnector(RestConnector):
                             else {**parent, nested: child})
         return rows
 
-    def _response_census(self) -> list[dict]:
+    def _response_census(self, order_numbers: list[str] | None = None) -> list[dict]:
         """
-        One request to every endpoint that can be asked without identifiers, kept
-        as the supplier answered it.
+        One request to every read endpoint, kept as the supplier answered it.
 
-        This is where successful, message, errorCode, traceId, pageIndex, pageSize
-        and total exist as data rather than as plumbing. The secret key and the
-        signature travel as headers and are never recorded.
+        This is where the envelope and paging -- successful, message, errorCode,
+        traceId, pageIndex, pageSize, total -- exist as data rather than as
+        plumbing, and where the id lists the keyed endpoints are sent
+        (platformOidList, productCodeList) are kept rather than discarded once
+        the request is made. The secret key and the signature travel as headers
+        and are never recorded.
         """
         rows: list[dict] = []
+        product_codes: list[str] = []
         for key in ("styles", "colors", "sizes", "products", "ship_addresses"):
-            path = READ_ENDPOINTS[key]
-            body = {"pageIndex": 1, "pageSize": 1} if key in PAGED else {}
+            body = ({"pageIndex": 1, "pageSize": 10 if key == "products" else 1}
+                    if key in PAGED else {})
             started = time.perf_counter()
-            result = self._post(path, body)
-            data = result.get("data")
-            records = self._raw_records(result)
-            page = data if isinstance(data, dict) else {}
-            rows.append({
-                "endpoint": path.rsplit("/", 1)[1],
-                "path": path,
-                "requestBody": _json(body),
-                "successful": result.get("successful"),
-                "success": result.get("success"),
-                "message": result.get("message"),
-                "errorCode": result.get("errorCode"),
-                "traceId": result.get("traceId"),
-                "dataShape": ("page" if isinstance(data, dict)
-                              else "list" if isinstance(data, list) else type(data).__name__),
-                "pageIndex": page.get("pageIndex"),
-                "pageSize": page.get("pageSize"),
-                "total": page.get("total", len(data) if isinstance(data, list) else None),
-                "recordsReturned": len(records),
-                "responseKeys": ", ".join(sorted(result)),
-                "dataKeys": ", ".join(sorted(page)),
-                "recordKeys": ", ".join(sorted({k for r in records for k in r})),
-                "data": _json(data),
-                "durationMs": int((time.perf_counter() - started) * 1000),
-            })
+            result = self._post(READ_ENDPOINTS[key], body)
+            if key == "products":
+                product_codes = [str(r["productCode"]) for r in self._raw_records(result)
+                                 if r.get("productCode")][:10]
+            rows.append(self._census_row(READ_ENDPOINTS[key], body, result, started))
+
+        requests: list[tuple[str, dict]] = []
+        if order_numbers:
+            # The documented limit per request; the census needs one request each.
+            ids = [str(number) for number in order_numbers[:100]]
+            requests += [(key, {"platformOidList": ids})
+                         for key in ("order_info", "order_status", "order_delivery")]
+        if product_codes:
+            requests.append(("product_ship_addresses", {"productCodeList": product_codes}))
+        for key, body in requests:
+            started = time.perf_counter()
+            result = self._post(READ_ENDPOINTS[key], body)
+            rows.append(self._census_row(READ_ENDPOINTS[key], body, result, started))
         return rows
+
+    def _census_row(self, path: str, body: dict, result: dict, started: float) -> dict:
+        data = result.get("data")
+        records = self._raw_records(result)
+        page = data if isinstance(data, dict) else {}
+        return {
+            "endpoint": path.rsplit("/", 1)[1],
+            "path": path,
+            "requestBody": _json(body),
+            "platformOidList": ", ".join(body.get("platformOidList", [])) or None,
+            "productCodeList": ", ".join(body.get("productCodeList", [])) or None,
+            "idsSent": len(body.get("platformOidList", []) or body.get("productCodeList", [])) or None,
+            "successful": result.get("successful"),
+            "success": result.get("success"),
+            "message": result.get("message"),
+            "errorCode": result.get("errorCode"),
+            "traceId": result.get("traceId"),
+            "dataShape": ("page" if isinstance(data, dict)
+                          else "list" if isinstance(data, list) else type(data).__name__),
+            "pageIndex": page.get("pageIndex"),
+            "pageSize": page.get("pageSize"),
+            "total": page.get("total", len(data) if isinstance(data, list) else None),
+            "recordsReturned": len(records),
+            "responseKeys": ", ".join(sorted(result)),
+            "dataKeys": ", ".join(sorted(page)),
+            "recordKeys": ", ".join(sorted({k for r in records for k in r})),
+            "data": _json(data),
+            "durationMs": int((time.perf_counter() - started) * 1000),
+        }
 
     # -- discovery ----------------------------------------------------------
     def discover(self) -> Discovery:
@@ -756,7 +788,7 @@ class RiinConnector(RestConnector):
         keys: list[str] | None = None,
     ) -> Page:
         if dataset == API_RESPONSES:
-            return Page(rows=self._response_census(), cursor=None)
+            return Page(rows=self._response_census(keys), cursor=None)
 
         path = READ_ENDPOINTS.get(dataset)
         if path is None:
